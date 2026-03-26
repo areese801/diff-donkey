@@ -75,6 +75,33 @@ const result = await invoke<TableMeta>("load_source", { path: filePath });
 fn load_source(path: String, state: State<DuckDbState>) -> Result<TableMeta, String> { ... }
 ```
 
+## Run Tests
+
+```bash
+# Rust tests (11 tests covering loader, schema, diff engine, keys)
+cargo test --manifest-path src-tauri/Cargo.toml
+
+# Frontend build check
+npm run build
+```
+
+## Security
+
+All IPC inputs are validated before use in SQL:
+- Label allowlist ("a" or "b") prevents table name injection
+- PK column validated against `information_schema.columns`
+- Column filter validated against known diff columns
+- File paths escaped (single quotes doubled)
+- CSP enabled (`default-src 'self'`)
+- Page size capped at 1000 rows
+- Error messages sanitized (no path/SQL leakage to frontend)
+
+## GitHub
+
+- Repo: https://github.com/areese801/diff-donkey
+- Branch protection on `main` — PRs required, no force push
+- Renamed from `duck-diff` → `diff-donkey` on 2026-03-25
+
 ## Design Spec
 
 Full specification: `docs/superpowers/specs/2026-03-25-diff-donkey-design.md`

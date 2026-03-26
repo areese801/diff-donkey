@@ -6,7 +6,7 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig } from "./types/diff";
 
 /** Load a file into DuckDB as source_a or source_b */
 export async function loadSource(
@@ -21,9 +21,9 @@ export async function getSchemaComparison(): Promise<SchemaComparison> {
   return invoke<SchemaComparison>("get_schema_comparison");
 }
 
-/** Run the full diff with the given primary key */
-export async function runDiff(pkColumn: string): Promise<OverviewResult> {
-  return invoke<OverviewResult>("run_diff", { pkColumn });
+/** Run the full diff with the given config (PK + optional tolerance) */
+export async function runDiff(config: DiffConfig): Promise<OverviewResult> {
+  return invoke<OverviewResult>("run_diff", { config });
 }
 
 /** Get exclusive rows for a given side (a or b) */

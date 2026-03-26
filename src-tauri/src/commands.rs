@@ -16,7 +16,7 @@ use crate::db::DuckDbState;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
-use crate::types::{OverviewResult, PagedRows, SchemaComparison, TableMeta};
+use crate::types::{DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta};
 
 /// Maximum rows per page to prevent memory exhaustion via large page_size.
 const MAX_PAGE_SIZE: usize = 1000;
@@ -103,40 +103,81 @@ pub fn get_schema_comparison(state: State<DuckDbState>) -> Result<SchemaComparis
 
 /// Run the full diff on both sources.
 ///
-/// The pk_column is the primary key to join on.
-/// Compares all shared columns except the PK itself.
+/// Accepts a `DiffConfig` with the primary key column, optional default tolerance,
+/// and optional per-column tolerance overrides.
 #[tauri::command]
-pub fn run_diff(pk_column: String, state: State<DuckDbState>) -> Result<OverviewResult, String> {
+pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<OverviewResult, String> {
     let conn = state
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
+    let pk_column = &config.pk_column;
+
     // SECURITY: Validate pk_column exists in both source tables.
-    // This prevents SQL injection via crafted column names — if the column
-    // doesn't exist in the actual schema, we reject it.
-    validate_column_exists(&conn, "source_a", &pk_column)?;
-    validate_column_exists(&conn, "source_b", &pk_column)?;
+    validate_column_exists(&conn, "source_a", pk_column)?;
+    validate_column_exists(&conn, "source_b", pk_column)?;
+
+    // Validate tolerance values: must be non-negative, finite
+    if let Some(tol) = config.tolerance {
+        if tol < 0.0 || tol.is_nan() || tol.is_infinite() {
+            return Err("Default tolerance must be a non-negative finite number".to_string());
+        }
+    }
+    let column_tolerances = config.column_tolerances.unwrap_or_default();
+    for (col, tol) in &column_tolerances {
+        if *tol < 0.0 || tol.is_nan() || tol.is_infinite() {
+            return Err(format!(
+                "Tolerance for column '{}' must be a non-negative finite number",
+                col
+            ));
+        }
+    }
 
     // Get shared columns (excluding PK) to compare
     let schema = diff::schema::compare_schemas(&conn).map_err(|e| e.to_string())?;
     let compare_columns: Vec<String> = schema
         .shared
         .iter()
-        .filter(|c| c.name != pk_column)
+        .filter(|c| c.name != *pk_column)
         .map(|c| c.name.clone())
         .collect();
 
-    // SECURITY: Store PK column name using a parameterized query — not string interpolation.
-    // The old code used format!("...'{}'...", pk_column) which was a SQL injection vector.
+    // Build column type map from shared columns.
+    // Only include columns where BOTH types are numeric to avoid runtime cast errors.
+    let column_types: std::collections::HashMap<String, String> = schema
+        .shared
+        .iter()
+        .filter(|c| c.name != *pk_column)
+        .map(|c| {
+            // Use type_a if both sides are numeric; otherwise report as non-numeric
+            let effective_type = if diff::stats::is_numeric_type(&c.type_a)
+                && diff::stats::is_numeric_type(&c.type_b)
+            {
+                c.type_a.clone()
+            } else {
+                c.type_a.clone()
+            };
+            (c.name.clone(), effective_type)
+        })
+        .collect();
+
+    // SECURITY: Store PK column name using a parameterized query.
     conn.execute(
         "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_column",
-        [&pk_column],
+        [pk_column],
     )
     .map_err(|e| e.to_string())?;
 
-    diff::stats::run_diff(&conn, &pk_column, &compare_columns)
-        .map_err(|e: DiffDonkeyError| e.into())
+    diff::stats::run_diff(
+        &conn,
+        pk_column,
+        &compare_columns,
+        &column_types,
+        config.tolerance,
+        &column_tolerances,
+    )
+    .map_err(|e: DiffDonkeyError| e.into())
 }
 
 /// Helper: get the PK column name from the stored diff metadata.

@@ -86,9 +86,16 @@ pub struct ValuesSummary {
 }
 
 /// Diff configuration sent from the frontend.
+///
+/// `tolerance` sets a default numeric threshold for all numeric columns.
+/// `column_tolerances` overrides the default for specific columns.
+/// Resolution order: column_tolerances[col] → tolerance → None (IS DISTINCT FROM).
+///
 #[derive(Debug, serde::Deserialize)]
 pub struct DiffConfig {
     pub pk_column: String,
+    pub tolerance: Option<f64>,
+    pub column_tolerances: Option<std::collections::HashMap<String, f64>>,
 }
 
 /// Paginated row data — used for exclusive rows, duplicates, and diff rows.

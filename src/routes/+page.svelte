@@ -35,15 +35,24 @@
     }
   }
 
-  async function handleRunDiff(selectedPk: string) {
+  async function handleRunDiff(
+    selectedPk: string,
+    tolerance: number | null,
+    columnTolerances: Record<string, number> | null,
+  ) {
     isLoading.set(true);
     diffError = null;
     pkColumn.set(selectedPk);
 
     try {
-      const result = await runDiff(selectedPk);
+      const isFirstRun = !$diffResult;
+      const result = await runDiff({
+        pk_column: selectedPk,
+        tolerance,
+        column_tolerances: columnTolerances,
+      });
       diffResult.set(result);
-      activeTab = "overview";
+      if (isFirstRun) activeTab = "overview";
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
     } finally {

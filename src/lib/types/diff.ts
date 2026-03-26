@@ -74,6 +74,13 @@ export interface ValuesSummary {
   rows_identical: number;
 }
 
+/** Diff configuration sent to the backend */
+export interface DiffConfig {
+  pk_column: string;
+  tolerance: number | null;
+  column_tolerances: Record<string, number> | null;
+}
+
 /** Paginated row data returned from backend */
 export interface PagedRows {
   columns: string[];
