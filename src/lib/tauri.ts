@@ -1,0 +1,54 @@
+/**
+ * Typed wrappers around Tauri's invoke() function.
+ *
+ * Instead of calling invoke() directly with string command names,
+ * use these functions for type safety. If the Rust command signature
+ * changes, TypeScript will catch the mismatch at compile time.
+ */
+import { invoke } from "@tauri-apps/api/core";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows } from "./types/diff";
+
+/** Load a file into DuckDB as source_a or source_b */
+export async function loadSource(
+  path: string,
+  label: "a" | "b"
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_source", { path, label });
+}
+
+/** Compare schemas of the two loaded sources */
+export async function getSchemaComparison(): Promise<SchemaComparison> {
+  return invoke<SchemaComparison>("get_schema_comparison");
+}
+
+/** Run the full diff with the given primary key */
+export async function runDiff(pkColumn: string): Promise<OverviewResult> {
+  return invoke<OverviewResult>("run_diff", { pkColumn });
+}
+
+/** Get exclusive rows for a given side (a or b) */
+export async function getExclusiveRows(
+  side: "a" | "b",
+  page: number,
+  pageSize: number
+): Promise<PagedRows> {
+  return invoke<PagedRows>("get_exclusive_rows", { side, page, pageSize });
+}
+
+/** Get duplicate PKs for a given side (a or b) */
+export async function getDuplicatePks(
+  side: "a" | "b",
+  page: number,
+  pageSize: number
+): Promise<PagedRows> {
+  return invoke<PagedRows>("get_duplicate_pks", { side, page, pageSize });
+}
+
+/** Get diff rows (rows where values differ), with optional column filter */
+export async function getDiffRows(
+  page: number,
+  pageSize: number,
+  columnFilter?: string
+): Promise<PagedRows> {
+  return invoke<PagedRows>("get_diff_rows", { page, pageSize, columnFilter: columnFilter ?? null });
+}

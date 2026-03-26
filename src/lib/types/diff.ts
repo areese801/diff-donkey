@@ -1,0 +1,84 @@
+/**
+ * TypeScript interfaces mirroring the Rust types in src-tauri/src/types.rs.
+ *
+ * These must stay in sync with the Rust structs — when you add a field
+ * in Rust, add it here too. Serde serializes Rust struct fields as
+ * camelCase by default (matching JS conventions).
+ */
+
+/** Metadata about a loaded table — matches Rust's TableMeta */
+export interface TableMeta {
+  table_name: string;
+  row_count: number;
+  columns: ColumnInfo[];
+}
+
+/** Info about a single column — matches Rust's ColumnInfo */
+export interface ColumnInfo {
+  name: string;
+  data_type: string;
+}
+
+/** Schema comparison between two tables */
+export interface SchemaComparison {
+  shared: SharedColumnInfo[];
+  only_in_a: ColumnInfo[];
+  only_in_b: ColumnInfo[];
+}
+
+/** A column present in both tables */
+export interface SharedColumnInfo {
+  name: string;
+  type_a: string;
+  type_b: string;
+  types_match: boolean;
+}
+
+/** Complete diff result — everything for the Overview tab */
+export interface OverviewResult {
+  diff_stats: DiffStats;
+  pk_summary: PkSummary;
+  values_summary: ValuesSummary;
+  total_rows_a: number;
+  total_rows_b: number;
+}
+
+/** Per-column diff statistics */
+export interface DiffStats {
+  columns: ColumnDiffStats[];
+}
+
+/** Stats for a single column comparison */
+export interface ColumnDiffStats {
+  name: string;
+  diff_count: number;
+  match_count: number;
+  total: number;
+  match_pct: number;
+}
+
+/** Primary key analysis summary */
+export interface PkSummary {
+  exclusive_a: number;
+  exclusive_b: number;
+  duplicate_pks_a: number;
+  duplicate_pks_b: number;
+  null_pks_a: number;
+  null_pks_b: number;
+}
+
+/** Values-level summary */
+export interface ValuesSummary {
+  total_compared: number;
+  rows_with_diffs: number;
+  rows_identical: number;
+}
+
+/** Paginated row data returned from backend */
+export interface PagedRows {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total: number;
+  page: number;
+  page_size: number;
+}

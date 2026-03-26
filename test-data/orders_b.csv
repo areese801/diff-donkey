@@ -1,0 +1,11 @@
+id,customer_name,amount,status,created_at
+1,Alice Johnson,150.00,completed,2024-01-15
+2,Bob Smith,280.00,completed,2024-01-16
+3,Carol White,89.99,shipped,2024-01-17
+4,Dave Brown,432.00,completed,2024-01-18
+5,eve davis,67.25,cancelled,2024-01-19
+6,Frank Miller,199.99,completed,2024-01-20
+7,Grace Lee,315.75,completed,2024-01-21
+9,Iris Taylor,245.50,completed,2024-01-23
+10,Jack Anderson,178.30,pending,2024-01-24
+11,Karen Martinez,520.00,pending,2024-01-25
