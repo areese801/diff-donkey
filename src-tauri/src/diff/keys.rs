@@ -200,7 +200,7 @@ mod tests {
             "status".into(),
             "created_at".into(),
         ];
-        stats::run_diff(&conn, "id", &compare_cols).unwrap();
+        stats::run_diff(&conn, "id", &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::new()).unwrap();
         conn
     }
 
