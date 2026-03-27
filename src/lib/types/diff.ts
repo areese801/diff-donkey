@@ -74,11 +74,19 @@ export interface ValuesSummary {
   rows_identical: number;
 }
 
+/** Tolerance mode for a single column */
+export type ColumnTolerance =
+  | { mode: "precision"; precision: number }
+  | { mode: "seconds"; seconds: number }
+  | { mode: "case_insensitive" }
+  | { mode: "whitespace" }
+  | { mode: "case_insensitive_whitespace" };
+
 /** Diff configuration sent to the backend */
 export interface DiffConfig {
   pk_column: string;
   tolerance: number | null;
-  column_tolerances: Record<string, number> | null;
+  column_tolerances: Record<string, ColumnTolerance> | null;
 }
 
 /** Paginated row data returned from backend */

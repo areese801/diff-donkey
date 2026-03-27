@@ -38,7 +38,7 @@
   async function handleRunDiff(
     selectedPk: string,
     tolerance: number | null,
-    columnTolerances: Record<string, number> | null,
+    columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
   ) {
     isLoading.set(true);
     diffError = null;
