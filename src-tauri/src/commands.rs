@@ -16,7 +16,7 @@ use crate::db::DuckDbState;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
-use crate::types::{DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta};
+use crate::types::{ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta};
 
 /// Maximum rows per page to prevent memory exhaustion via large page_size.
 const MAX_PAGE_SIZE: usize = 1000;
@@ -118,19 +118,32 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
     validate_column_exists(&conn, "source_a", pk_column)?;
     validate_column_exists(&conn, "source_b", pk_column)?;
 
-    // Validate tolerance values: must be non-negative, finite
-    if let Some(tol) = config.tolerance {
-        if tol < 0.0 || tol.is_nan() || tol.is_infinite() {
-            return Err("Default tolerance must be a non-negative finite number".to_string());
+    // Validate global precision
+    if let Some(prec) = config.tolerance {
+        if prec < 0 {
+            return Err("Decimal places must be a non-negative integer".to_string());
         }
     }
+
+    // Validate per-column tolerances
     let column_tolerances = config.column_tolerances.unwrap_or_default();
     for (col, tol) in &column_tolerances {
-        if *tol < 0.0 || tol.is_nan() || tol.is_infinite() {
-            return Err(format!(
-                "Tolerance for column '{}' must be a non-negative finite number",
-                col
-            ));
+        match tol {
+            ColumnTolerance::Precision { precision } if *precision < 0 => {
+                return Err(format!(
+                    "Precision for column '{}' must be non-negative",
+                    col
+                ));
+            }
+            ColumnTolerance::Seconds { seconds }
+                if *seconds < 0.0 || seconds.is_nan() || seconds.is_infinite() =>
+            {
+                return Err(format!(
+                    "Seconds tolerance for column '{}' must be a non-negative finite number",
+                    col
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -143,23 +156,12 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         .map(|c| c.name.clone())
         .collect();
 
-    // Build column type map from shared columns.
-    // Only include columns where BOTH types are numeric to avoid runtime cast errors.
+    // Build column type map from shared columns (use type_a)
     let column_types: std::collections::HashMap<String, String> = schema
         .shared
         .iter()
         .filter(|c| c.name != *pk_column)
-        .map(|c| {
-            // Use type_a if both sides are numeric; otherwise report as non-numeric
-            let effective_type = if diff::stats::is_numeric_type(&c.type_a)
-                && diff::stats::is_numeric_type(&c.type_b)
-            {
-                c.type_a.clone()
-            } else {
-                c.type_a.clone()
-            };
-            (c.name.clone(), effective_type)
-        })
+        .map(|c| (c.name.clone(), c.type_a.clone()))
         .collect();
 
     // SECURITY: Store PK column name using a parameterized query.

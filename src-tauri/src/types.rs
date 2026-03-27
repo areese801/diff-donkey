@@ -85,17 +85,42 @@ pub struct ValuesSummary {
     pub rows_identical: i64,
 }
 
+/// Tolerance mode for a single column comparison.
+/// Each variant maps to a different SQL comparison strategy.
+#[derive(Debug, serde::Deserialize, Clone)]
+#[serde(tag = "mode")]
+pub enum ColumnTolerance {
+    /// Numeric precision: ROUND(a, N) = ROUND(b, N)
+    #[serde(rename = "precision")]
+    Precision { precision: i32 },
+
+    /// Timestamp tolerance: values within N seconds are a match
+    #[serde(rename = "seconds")]
+    Seconds { seconds: f64 },
+
+    /// Case-insensitive string comparison: LOWER(a) = LOWER(b)
+    #[serde(rename = "case_insensitive")]
+    CaseInsensitive,
+
+    /// Whitespace-normalized comparison: TRIM(a) = TRIM(b)
+    #[serde(rename = "whitespace")]
+    Whitespace,
+
+    /// Both case-insensitive and whitespace-normalized
+    #[serde(rename = "case_insensitive_whitespace")]
+    CaseInsensitiveWhitespace,
+}
+
 /// Diff configuration sent from the frontend.
 ///
-/// `tolerance` sets a default numeric threshold for all numeric columns.
-/// `column_tolerances` overrides the default for specific columns.
-/// Resolution order: column_tolerances[col] → tolerance → None (IS DISTINCT FROM).
-///
+/// `tolerance` sets a default numeric precision (decimal places) for all numeric columns.
+/// `column_tolerances` overrides specific columns with any tolerance mode.
+/// Resolution: column_tolerances[col] → auto-apply Precision(tolerance) if numeric → IS DISTINCT FROM.
 #[derive(Debug, serde::Deserialize)]
 pub struct DiffConfig {
     pub pk_column: String,
-    pub tolerance: Option<f64>,
-    pub column_tolerances: Option<std::collections::HashMap<String, f64>>,
+    pub tolerance: Option<i32>,
+    pub column_tolerances: Option<std::collections::HashMap<String, ColumnTolerance>>,
 }
 
 /// Paginated row data — used for exclusive rows, duplicates, and diff rows.

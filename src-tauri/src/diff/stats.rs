@@ -2,7 +2,7 @@
 ///
 /// This implements the Datafold algorithm:
 /// 1. FULL OUTER JOIN source_a and source_b on the primary key
-/// 2. For each column, compute `col_a IS DISTINCT FROM col_b` → 0/1
+/// 2. For each column, compute a diff expression → 0/1
 /// 3. Materialize as a temp table (_diff_join)
 /// 4. Aggregate: SUM each is_diff column → per-column diff counts
 ///
@@ -10,17 +10,21 @@
 ///   NULL IS DISTINCT FROM NULL  → false (they're "equal")
 ///   NULL IS DISTINCT FROM 'x'  → true  (they differ)
 ///
-/// In Snowflake terms, this is like:
-///   SELECT col_a, col_b, (col_a IS DISTINCT FROM col_b)::INT as is_diff
-///   FROM table_a FULL OUTER JOIN table_b ON a.pk = b.pk
+/// Tolerance modes override IS DISTINCT FROM with type-specific comparisons:
+///   Precision  → ROUND(a, N) = ROUND(b, N)
+///   Seconds    → ABS(EPOCH(a) - EPOCH(b)) <= N
+///   CaseInsensitive → LOWER(a) IS DISTINCT FROM LOWER(b)
+///   Whitespace → TRIM(a) IS DISTINCT FROM TRIM(b)
 use std::collections::HashMap;
 
 use duckdb::Connection;
 
 use crate::error::DiffDonkeyError;
-use crate::types::{ColumnDiffStats, DiffStats, OverviewResult, PkSummary, ValuesSummary};
+use crate::types::{
+    ColumnDiffStats, ColumnTolerance, DiffStats, OverviewResult, PkSummary, ValuesSummary,
+};
 
-/// Check whether a DuckDB data type is numeric (eligible for tolerance comparison).
+/// Check whether a DuckDB data type is numeric (eligible for precision tolerance).
 pub fn is_numeric_type(data_type: &str) -> bool {
     let upper = data_type.to_uppercase();
     matches!(
@@ -39,20 +43,31 @@ pub fn is_numeric_type(data_type: &str) -> bool {
     ) || upper.starts_with("DECIMAL")
 }
 
+/// Check whether a DuckDB data type is a timestamp (eligible for seconds tolerance).
+pub fn is_timestamp_type(data_type: &str) -> bool {
+    data_type.to_uppercase().starts_with("TIMESTAMP")
+}
+
 /// Run the full diff: build the join table and compute all stats.
 ///
 /// This is the main entry point called by the `run_diff` Tauri command.
-/// It orchestrates the entire diff pipeline.
 pub fn run_diff(
     conn: &Connection,
     pk_column: &str,
     compare_columns: &[String],
     column_types: &HashMap<String, String>,
-    tolerance: Option<f64>,
-    column_tolerances: &HashMap<String, f64>,
+    default_precision: Option<i32>,
+    column_tolerances: &HashMap<String, ColumnTolerance>,
 ) -> Result<OverviewResult, DiffDonkeyError> {
     // Step 1: Build the materialized join table
-    build_diff_join(conn, pk_column, compare_columns, column_types, tolerance, column_tolerances)?;
+    build_diff_join(
+        conn,
+        pk_column,
+        compare_columns,
+        column_types,
+        default_precision,
+        column_tolerances,
+    )?;
 
     // Step 2: Compute aggregate stats from the join table
     let diff_stats = compute_diff_stats(conn, compare_columns)?;
@@ -61,11 +76,7 @@ pub fn run_diff(
     let pk_summary = compute_pk_summary(conn, pk_column)?;
 
     // Step 4: Compute values-level summary
-    let total_rows: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM _diff_join",
-        [],
-        |row| row.get(0),
-    )?;
+    let total_rows: i64 = conn.query_row("SELECT COUNT(*) FROM _diff_join", [], |row| row.get(0))?;
 
     let rows_with_diffs: i64 = if compare_columns.is_empty() {
         0
@@ -104,65 +115,40 @@ pub fn run_diff(
 }
 
 /// Build the materialized diff join table.
-///
-/// Creates a temporary table `_diff_join` with:
-/// - pk_a, pk_b: the primary key from each side (NULL if exclusive)
-/// - {col}_a, {col}_b: the column values from each side
-/// - is_diff_{col}: 1 if values differ, 0 if they match
-///
-/// This is the SQL equivalent of Datafold's `_create_outer_join()`.
 fn build_diff_join(
     conn: &Connection,
     pk_column: &str,
     compare_columns: &[String],
     column_types: &HashMap<String, String>,
-    tolerance: Option<f64>,
-    column_tolerances: &HashMap<String, f64>,
+    default_precision: Option<i32>,
+    column_tolerances: &HashMap<String, ColumnTolerance>,
 ) -> Result<(), DiffDonkeyError> {
-    // Build the SELECT clause:
-    //   a.pk as pk_a, b.pk as pk_b,
-    //   a.col1 as col1_a, b.col1 as col1_b,
-    //   (a.col1 IS DISTINCT FROM b.col1)::INTEGER as is_diff_col1,
-    //   ...
     let mut select_parts = vec![
         format!("a.\"{}\" as pk_a", pk_column),
         format!("b.\"{}\" as pk_b", pk_column),
     ];
 
     for col in compare_columns {
-        // Value columns from each side
         select_parts.push(format!("a.\"{}\" as \"{}_a\"", col, col));
         select_parts.push(format!("b.\"{}\" as \"{}_b\"", col, col));
-
-        // Resolve effective tolerance: per-column override → global default → None
-        let effective_tol = column_tolerances
-            .get(col.as_str())
-            .or(tolerance.as_ref())
-            .copied();
 
         let col_type = column_types
             .get(col.as_str())
             .map(|s| s.as_str())
             .unwrap_or("");
 
-        // Generate IS DISTINCT FROM or tolerance-aware comparison
-        let is_diff_expr = match effective_tol {
-            Some(tol) if tol > 0.0 && is_numeric_type(col_type) => {
-                // Tolerance mode: NULL-safe ABS comparison
-                format!(
-                    "CASE WHEN a.\"{}\" IS NULL AND b.\"{}\" IS NULL THEN 0 \
-                     WHEN a.\"{}\" IS NULL OR b.\"{}\" IS NULL THEN 1 \
-                     WHEN ABS(a.\"{}\" - b.\"{}\") > {} THEN 1 ELSE 0 END",
-                    col, col, col, col, col, col, tol
-                )
+        // Resolve effective tolerance for this column
+        let explicit_tol = column_tolerances.get(col.as_str());
+        let is_diff_expr = if let Some(tol) = explicit_tol {
+            tolerance_sql(col, col_type, tol)
+        } else if let Some(prec) = default_precision {
+            if is_numeric_type(col_type) {
+                tolerance_sql(col, col_type, &ColumnTolerance::Precision { precision: prec })
+            } else {
+                default_diff_sql(col)
             }
-            _ => {
-                // Standard: IS DISTINCT FROM (handles NULLs correctly)
-                format!(
-                    "(a.\"{}\" IS DISTINCT FROM b.\"{}\")::INTEGER",
-                    col, col
-                )
-            }
+        } else {
+            default_diff_sql(col)
         };
 
         select_parts.push(format!("{} as \"is_diff_{}\"", is_diff_expr, col));
@@ -182,10 +168,57 @@ fn build_diff_join(
     Ok(())
 }
 
+/// Generate the default IS DISTINCT FROM expression.
+fn default_diff_sql(col: &str) -> String {
+    format!(
+        "(a.\"{}\" IS DISTINCT FROM b.\"{}\")::INTEGER",
+        col, col
+    )
+}
+
+/// Generate a tolerance-aware diff expression for the given column and mode.
+fn tolerance_sql(col: &str, col_type: &str, tol: &ColumnTolerance) -> String {
+    match tol {
+        ColumnTolerance::Precision { precision } if is_numeric_type(col_type) => {
+            format!(
+                "CASE WHEN a.\"{}\" IS NULL AND b.\"{}\" IS NULL THEN 0 \
+                 WHEN a.\"{}\" IS NULL OR b.\"{}\" IS NULL THEN 1 \
+                 WHEN ROUND(a.\"{}\"::DOUBLE, {}) = ROUND(b.\"{}\"::DOUBLE, {}) THEN 0 ELSE 1 END",
+                col, col, col, col, col, precision, col, precision
+            )
+        }
+        ColumnTolerance::Seconds { seconds } if is_timestamp_type(col_type) => {
+            format!(
+                "CASE WHEN a.\"{}\" IS NULL AND b.\"{}\" IS NULL THEN 0 \
+                 WHEN a.\"{}\" IS NULL OR b.\"{}\" IS NULL THEN 1 \
+                 WHEN ABS(EPOCH(a.\"{}\") - EPOCH(b.\"{}\")) <= {} THEN 0 ELSE 1 END",
+                col, col, col, col, col, col, seconds
+            )
+        }
+        ColumnTolerance::CaseInsensitive => {
+            format!(
+                "(LOWER(a.\"{}\") IS DISTINCT FROM LOWER(b.\"{}\"))::INTEGER",
+                col, col
+            )
+        }
+        ColumnTolerance::Whitespace => {
+            format!(
+                "(TRIM(a.\"{}\") IS DISTINCT FROM TRIM(b.\"{}\"))::INTEGER",
+                col, col
+            )
+        }
+        ColumnTolerance::CaseInsensitiveWhitespace => {
+            format!(
+                "(LOWER(TRIM(a.\"{}\")) IS DISTINCT FROM LOWER(TRIM(b.\"{}\")))::INTEGER",
+                col, col
+            )
+        }
+        // Type mismatch (e.g., Precision on VARCHAR) — fall through to default
+        _ => default_diff_sql(col),
+    }
+}
+
 /// Compute per-column diff statistics from the materialized join table.
-///
-/// For each column, counts how many rows differ vs match.
-/// This is the equivalent of Datafold's `_count_diff_per_column()`.
 fn compute_diff_stats(
     conn: &Connection,
     compare_columns: &[String],
@@ -194,10 +227,6 @@ fn compute_diff_stats(
         return Ok(DiffStats { columns: vec![] });
     }
 
-    // Build aggregate query:
-    //   SELECT SUM(is_diff_col1), COUNT(*) - SUM(is_diff_col1), ...
-    //   FROM _diff_join
-    //   WHERE pk_a IS NOT NULL AND pk_b IS NOT NULL  -- only matched rows
     let mut agg_parts = Vec::new();
     for col in compare_columns {
         agg_parts.push(format!("SUM(\"is_diff_{col}\")"));
@@ -239,21 +268,18 @@ fn compute_diff_stats(
 
 /// Compute primary key summary: exclusive rows and duplicates.
 fn compute_pk_summary(conn: &Connection, pk_column: &str) -> Result<PkSummary, DiffDonkeyError> {
-    // Exclusive to A: rows where pk_b is NULL (no match in B)
     let exclusive_a: i64 = conn.query_row(
         "SELECT COUNT(*) FROM _diff_join WHERE pk_b IS NULL",
         [],
         |row| row.get(0),
     )?;
 
-    // Exclusive to B: rows where pk_a is NULL (no match in A)
     let exclusive_b: i64 = conn.query_row(
         "SELECT COUNT(*) FROM _diff_join WHERE pk_a IS NULL",
         [],
         |row| row.get(0),
     )?;
 
-    // Duplicate PKs in A
     let duplicate_pks_a: i64 = conn.query_row(
         &format!(
             "SELECT COUNT(*) FROM (SELECT \"{}\" FROM source_a GROUP BY \"{}\" HAVING COUNT(*) > 1)",
@@ -263,7 +289,6 @@ fn compute_pk_summary(conn: &Connection, pk_column: &str) -> Result<PkSummary, D
         |row| row.get(0),
     )?;
 
-    // Duplicate PKs in B
     let duplicate_pks_b: i64 = conn.query_row(
         &format!(
             "SELECT COUNT(*) FROM (SELECT \"{}\" FROM source_b GROUP BY \"{}\" HAVING COUNT(*) > 1)",
@@ -273,15 +298,20 @@ fn compute_pk_summary(conn: &Connection, pk_column: &str) -> Result<PkSummary, D
         |row| row.get(0),
     )?;
 
-    // Null PKs
     let null_pks_a: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM source_a WHERE \"{}\" IS NULL", pk_column),
+        &format!(
+            "SELECT COUNT(*) FROM source_a WHERE \"{}\" IS NULL",
+            pk_column
+        ),
         [],
         |row| row.get(0),
     )?;
 
     let null_pks_b: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM source_b WHERE \"{}\" IS NULL", pk_column),
+        &format!(
+            "SELECT COUNT(*) FROM source_b WHERE \"{}\" IS NULL",
+            pk_column
+        ),
         [],
         |row| row.get(0),
     )?;
@@ -309,7 +339,6 @@ mod tests {
         conn
     }
 
-    /// Column types for the test CSV data.
     fn get_test_column_types() -> HashMap<String, String> {
         [
             ("customer_name", "VARCHAR"),
@@ -321,6 +350,8 @@ mod tests {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
     }
+
+    // ── Baseline tests (no tolerance) ─────────────────────────────────────
 
     #[test]
     fn test_run_diff_overview() {
@@ -336,15 +367,10 @@ mod tests {
 
         let result = run_diff(&conn, "id", &compare_cols, &col_types, None, &no_col_tol).unwrap();
 
-        // 10 rows in A, 10 rows in B
         assert_eq!(result.total_rows_a, 10);
         assert_eq!(result.total_rows_b, 10);
-
-        // Row 8 is exclusive to A, row 11 is exclusive to B
         assert_eq!(result.pk_summary.exclusive_a, 1);
         assert_eq!(result.pk_summary.exclusive_b, 1);
-
-        // No duplicate PKs in our test data
         assert_eq!(result.pk_summary.duplicate_pks_a, 0);
         assert_eq!(result.pk_summary.duplicate_pks_b, 0);
     }
@@ -363,22 +389,15 @@ mod tests {
 
         let result = run_diff(&conn, "id", &compare_cols, &col_types, None, &no_col_tol).unwrap();
 
-        // Find the customer_name column stats
         let name_stats = result.diff_stats.columns.iter().find(|c| c.name == "customer_name").unwrap();
-        // Row 5: "Eve Davis" vs "eve davis" — IS DISTINCT FROM catches case diff
-        assert_eq!(name_stats.diff_count, 1);
+        assert_eq!(name_stats.diff_count, 1); // "Eve Davis" vs "eve davis"
 
-        // Find the amount column stats
         let amount_stats = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
-        // Row 2: 275.50 vs 280.00
-        assert_eq!(amount_stats.diff_count, 1);
+        assert_eq!(amount_stats.diff_count, 1); // 275.50 vs 280.00
 
-        // Find the status column stats
         let status_stats = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
-        // Row 3: pending vs shipped, Row 7: pending vs completed
-        assert_eq!(status_stats.diff_count, 2);
+        assert_eq!(status_stats.diff_count, 2); // pending→shipped, pending→completed
 
-        // created_at should have no diffs
         let date_stats = result.diff_stats.columns.iter().find(|c| c.name == "created_at").unwrap();
         assert_eq!(date_stats.diff_count, 0);
     }
@@ -397,19 +416,15 @@ mod tests {
 
         let result = run_diff(&conn, "id", &compare_cols, &col_types, None, &no_col_tol).unwrap();
 
-        // 9 matched rows (IDs 1-7, 9, 10 are in both)
         assert_eq!(result.values_summary.total_compared, 9);
-
-        // 4 rows have at least one diff: rows 2 (amount), 3 (status), 5 (name), 7 (status)
         assert_eq!(result.values_summary.rows_with_diffs, 4);
         assert_eq!(result.values_summary.rows_identical, 5);
     }
 
-    // ── Tolerance-specific tests ──────────────────────────────────────────
+    // ── Type detection ────────────────────────────────────────────────────
 
     #[test]
     fn test_is_numeric_type() {
-        // Numeric types → true
         assert!(is_numeric_type("INTEGER"));
         assert!(is_numeric_type("BIGINT"));
         assert!(is_numeric_type("FLOAT"));
@@ -424,7 +439,6 @@ mod tests {
         assert!(is_numeric_type("DECIMAL(10,2)"));
         assert!(is_numeric_type("decimal(18,4)"));
 
-        // Non-numeric types → false
         assert!(!is_numeric_type("VARCHAR"));
         assert!(!is_numeric_type("DATE"));
         assert!(!is_numeric_type("BOOLEAN"));
@@ -432,7 +446,21 @@ mod tests {
         assert!(!is_numeric_type("BLOB"));
     }
 
-    /// Helper: create inline SQL tables for tolerance tests.
+    #[test]
+    fn test_is_timestamp_type() {
+        assert!(is_timestamp_type("TIMESTAMP"));
+        assert!(is_timestamp_type("TIMESTAMPTZ"));
+        assert!(is_timestamp_type("TIMESTAMP WITH TIME ZONE"));
+        assert!(is_timestamp_type("TIMESTAMP_S"));
+        assert!(is_timestamp_type("TIMESTAMP_MS"));
+
+        assert!(!is_timestamp_type("DATE"));
+        assert!(!is_timestamp_type("VARCHAR"));
+        assert!(!is_timestamp_type("INTEGER"));
+    }
+
+    // ── Numeric precision tests ───────────────────────────────────────────
+
     fn setup_tolerance_tables(conn: &Connection) {
         conn.execute_batch(
             "CREATE TABLE source_a AS SELECT * FROM (VALUES
@@ -450,89 +478,97 @@ mod tests {
     }
 
     fn tolerance_column_types() -> HashMap<String, String> {
-        [
-            ("name", "VARCHAR"),
-            ("amount", "DOUBLE"),
-            ("status", "VARCHAR"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+        [("name", "VARCHAR"), ("amount", "DOUBLE"), ("status", "VARCHAR")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
-    fn test_tolerance_suppresses_small_diff() {
+    fn test_precision_suppresses_small_diff() {
         let conn = Connection::open_in_memory().unwrap();
         setup_tolerance_tables(&conn);
         let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
         let col_types = tolerance_column_types();
         let no_col_tol = HashMap::new();
 
-        // Diffs: id=1 amount delta=0.3, id=2 amount delta=4.5
-        // tolerance=5.0 → both within threshold → 0 amount diffs
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(5.0), &no_col_tol).unwrap();
+        // precision=0 → round to integer: 100.0→100, 100.3→100 (match); 200.5→201, 205.0→205 (diff)
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(0), &no_col_tol).unwrap();
 
         let amount = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
-        assert_eq!(amount.diff_count, 0);
+        assert_eq!(amount.diff_count, 1); // only id=2 differs at integer precision
 
-        // String columns unaffected by tolerance
+        // String columns unaffected
         let status = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
-        assert_eq!(status.diff_count, 1); // "pending" vs "shipped"
+        assert_eq!(status.diff_count, 1);
     }
 
     #[test]
-    fn test_tolerance_catches_large_diff() {
+    fn test_precision_round_comparison() {
         let conn = Connection::open_in_memory().unwrap();
-        setup_tolerance_tables(&conn);
-        let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
-        let col_types = tolerance_column_types();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 0.1234),
+                (2, 0.1234)
+            ) AS t(id, val);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 0.1235),
+                (2, 0.1244)
+            ) AS t(id, val);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["val".into()];
+        let col_types: HashMap<String, String> =
+            [("val".to_string(), "DOUBLE".to_string())].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        // tolerance=1.0 → id=1 (delta=0.3) within, id=2 (delta=4.5) exceeds → 1 diff
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(1.0), &no_col_tol).unwrap();
+        // precision=3 → ROUND(0.1234,3)=0.123, ROUND(0.1235,3)=0.124 (diff!)
+        //               ROUND(0.1234,3)=0.123, ROUND(0.1244,3)=0.124 (diff)
+        // Actually: ROUND(0.1235,3) in DuckDB uses banker's rounding → 0.124
+        // Let's use precision=2 for a clearer test:
+        // ROUND(0.1234,2)=0.12, ROUND(0.1235,2)=0.12 → match
+        // ROUND(0.1234,2)=0.12, ROUND(0.1244,2)=0.12 → match
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(2), &no_col_tol).unwrap();
+        let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
+        assert_eq!(val.diff_count, 0); // both match at 2dp
 
-        let amount = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
-        assert_eq!(amount.diff_count, 1);
-    }
-
-    #[test]
-    fn test_tolerance_not_applied_to_strings() {
-        let conn = Connection::open_in_memory().unwrap();
-        setup_tolerance_tables(&conn);
-        let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
-        let col_types = tolerance_column_types();
-        let no_col_tol = HashMap::new();
-
-        // Even a huge tolerance doesn't affect string comparisons
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(1000.0), &no_col_tol).unwrap();
-
-        let status = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
-        assert_eq!(status.diff_count, 1); // "pending" vs "shipped" still differs
-    }
-
-    #[test]
-    fn test_tolerance_zero_same_as_no_tolerance() {
-        let conn = Connection::open_in_memory().unwrap();
-        setup_tolerance_tables(&conn);
-        let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
-        let col_types = tolerance_column_types();
-        let no_col_tol = HashMap::new();
-
-        let result_none = run_diff(&conn, "id", &cols, &col_types, None, &no_col_tol).unwrap();
-
-        // Need fresh tables for second run
+        // Now recreate and test with precision=3
         conn.execute_batch("DROP TABLE source_a; DROP TABLE source_b;").unwrap();
-        setup_tolerance_tables(&conn);
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 0.1234),
+                (2, 0.1234)
+            ) AS t(id, val);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 0.1239),
+                (2, 0.1254)
+            ) AS t(id, val);"
+        ).unwrap();
 
-        let result_zero = run_diff(&conn, "id", &cols, &col_types, Some(0.0), &no_col_tol).unwrap();
-
-        for (a, b) in result_none.diff_stats.columns.iter().zip(result_zero.diff_stats.columns.iter()) {
-            assert_eq!(a.diff_count, b.diff_count, "Mismatch for column {}", a.name);
-        }
+        // precision=3: ROUND(0.1234,3)=0.123, ROUND(0.1239,3)=0.124 → diff
+        //              ROUND(0.1234,3)=0.123, ROUND(0.1254,3)=0.125 → diff
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(3), &no_col_tol).unwrap();
+        let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
+        assert_eq!(val.diff_count, 2);
     }
 
     #[test]
-    fn test_tolerance_null_handling() {
+    fn test_precision_not_applied_to_strings() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_tolerance_tables(&conn);
+        let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
+        let col_types = tolerance_column_types();
+        let no_col_tol = HashMap::new();
+
+        // Even with high precision, string columns use IS DISTINCT FROM
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(10), &no_col_tol).unwrap();
+
+        let status = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
+        assert_eq!(status.diff_count, 1);
+    }
+
+    #[test]
+    fn test_precision_null_handling() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE source_a AS SELECT * FROM (VALUES
@@ -546,7 +582,7 @@ mod tests {
                 (1, NULL),
                 (2, 100.0),
                 (3, NULL),
-                (4, 100.5)
+                (4, 100.4)
             ) AS t(id, val);"
         ).unwrap();
 
@@ -555,19 +591,19 @@ mod tests {
             [("val".to_string(), "DOUBLE".to_string())].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(1.0), &no_col_tol).unwrap();
-
+        // precision=0: ROUND(100.0,0)=100, ROUND(100.4,0)=100 → match
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(0), &no_col_tol).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         // id=1: NULL vs NULL → match
         // id=2: NULL vs 100.0 → diff
         // id=3: 100.0 vs NULL → diff
-        // id=4: 100.0 vs 100.5 with tol=1.0 → match
+        // id=4: 100.0 vs 100.4 → match (both round to 100)
         assert_eq!(val.diff_count, 2);
         assert_eq!(val.match_count, 2);
     }
 
     #[test]
-    fn test_per_column_tolerance_override() {
+    fn test_per_column_precision_override() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE source_a AS SELECT * FROM (VALUES
@@ -576,7 +612,7 @@ mod tests {
             ) AS t(id, price, weight);
 
             CREATE TABLE source_b AS SELECT * FROM (VALUES
-                (1, 102.0, 505.0),
+                (1, 100.4, 505.0),
                 (2, 208.0, 615.0)
             ) AS t(id, price, weight);"
         ).unwrap();
@@ -587,19 +623,21 @@ mod tests {
             ("weight".to_string(), "DOUBLE".to_string()),
         ].into_iter().collect();
 
-        // Default tolerance=1.0, but weight gets override of 10.0
-        let col_tol: HashMap<String, f64> =
-            [("weight".to_string(), 10.0)].into_iter().collect();
+        // Default precision=0 (integer rounding), but weight gets precision=2
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("weight".to_string(), ColumnTolerance::Precision { precision: 2 })].into_iter().collect();
 
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(1.0), &col_tol).unwrap();
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(0), &col_tol).unwrap();
 
         let price = result.diff_stats.columns.iter().find(|c| c.name == "price").unwrap();
-        // id=1: delta=2.0 > tol=1.0 → diff; id=2: delta=8.0 > tol=1.0 → diff
-        assert_eq!(price.diff_count, 2);
+        // precision=0: ROUND(100.0,0)=100, ROUND(100.4,0)=100 → match
+        //              ROUND(200.0,0)=200, ROUND(208.0,0)=208 → diff
+        assert_eq!(price.diff_count, 1);
 
         let weight = result.diff_stats.columns.iter().find(|c| c.name == "weight").unwrap();
-        // id=1: delta=5.0 ≤ tol=10.0 → match; id=2: delta=15.0 > tol=10.0 → diff
-        assert_eq!(weight.diff_count, 1);
+        // precision=2: ROUND(500.0,2)=500.0, ROUND(505.0,2)=505.0 → diff
+        //              ROUND(600.0,2)=600.0, ROUND(615.0,2)=615.0 → diff
+        assert_eq!(weight.diff_count, 2);
     }
 
     #[test]
@@ -611,7 +649,7 @@ mod tests {
             ) AS t(id, amount);
 
             CREATE TABLE source_b AS SELECT * FROM (VALUES
-                (1, 100.5)
+                (1, 100.4)
             ) AS t(id, amount);"
         ).unwrap();
 
@@ -619,14 +657,143 @@ mod tests {
         let col_types: HashMap<String, String> =
             [("amount".to_string(), "DOUBLE".to_string())].into_iter().collect();
 
-        // Default=100.0 (would suppress), but per-column=0.01 (strict)
-        let col_tol: HashMap<String, f64> =
-            [("amount".to_string(), 0.01)].into_iter().collect();
+        // Default precision=0 (would match: both round to 100), but per-column precision=1 (strict)
+        // ROUND(100.0,1)=100.0, ROUND(100.4,1)=100.4 → diff
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("amount".to_string(), ColumnTolerance::Precision { precision: 1 })].into_iter().collect();
 
-        let result = run_diff(&conn, "id", &cols, &col_types, Some(100.0), &col_tol).unwrap();
+        let result = run_diff(&conn, "id", &cols, &col_types, Some(0), &col_tol).unwrap();
 
         let amount = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
-        // delta=0.5 > per-column tol=0.01 → diff (not suppressed by default=100.0)
         assert_eq!(amount.diff_count, 1);
+    }
+
+    // ── Timestamp tolerance tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_timestamp_tolerance() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, TIMESTAMP '2024-01-01 12:00:00'),
+                (2, TIMESTAMP '2024-01-01 12:00:00')
+            ) AS t(id, ts);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, TIMESTAMP '2024-01-01 12:00:03'),
+                (2, TIMESTAMP '2024-01-01 12:00:10')
+            ) AS t(id, ts);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["ts".into()];
+        let col_types: HashMap<String, String> =
+            [("ts".to_string(), "TIMESTAMP".to_string())].into_iter().collect();
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("ts".to_string(), ColumnTolerance::Seconds { seconds: 5.0 })].into_iter().collect();
+
+        let result = run_diff(&conn, "id", &cols, &col_types, None, &col_tol).unwrap();
+        let ts = result.diff_stats.columns.iter().find(|c| c.name == "ts").unwrap();
+        assert_eq!(ts.diff_count, 1);  // id=1 within 5s, id=2 exceeds
+        assert_eq!(ts.match_count, 1);
+    }
+
+    // ── String tolerance tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_case_insensitive() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 'Alice'),
+                (2, 'Bob')
+            ) AS t(id, name);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 'alice'),
+                (2, 'Bobby')
+            ) AS t(id, name);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["name".into()];
+        let col_types: HashMap<String, String> =
+            [("name".to_string(), "VARCHAR".to_string())].into_iter().collect();
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("name".to_string(), ColumnTolerance::CaseInsensitive)].into_iter().collect();
+
+        let result = run_diff(&conn, "id", &cols, &col_types, None, &col_tol).unwrap();
+        let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
+        assert_eq!(name.diff_count, 1);  // "Bob" vs "Bobby" still differs
+        assert_eq!(name.match_count, 1); // "Alice" vs "alice" matches
+    }
+
+    #[test]
+    fn test_whitespace_tolerance() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, '  Alice  '),
+                (2, 'Bob')
+            ) AS t(id, name);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 'Alice'),
+                (2, 'Bobby')
+            ) AS t(id, name);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["name".into()];
+        let col_types: HashMap<String, String> =
+            [("name".to_string(), "VARCHAR".to_string())].into_iter().collect();
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("name".to_string(), ColumnTolerance::Whitespace)].into_iter().collect();
+
+        let result = run_diff(&conn, "id", &cols, &col_types, None, &col_tol).unwrap();
+        let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
+        assert_eq!(name.diff_count, 1);  // "Bob" vs "Bobby"
+        assert_eq!(name.match_count, 1); // "  Alice  " vs "Alice" matches after trim
+    }
+
+    #[test]
+    fn test_case_insensitive_whitespace() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, '  Alice  '),
+                (2, 'BOB')
+            ) AS t(id, name);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 'alice'),
+                (2, 'bob')
+            ) AS t(id, name);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["name".into()];
+        let col_types: HashMap<String, String> =
+            [("name".to_string(), "VARCHAR".to_string())].into_iter().collect();
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("name".to_string(), ColumnTolerance::CaseInsensitiveWhitespace)].into_iter().collect();
+
+        let result = run_diff(&conn, "id", &cols, &col_types, None, &col_tol).unwrap();
+        let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
+        assert_eq!(name.diff_count, 0);  // both match with case+trim
+    }
+
+    // ── Type mismatch fallthrough ─────────────────────────────────────────
+
+    #[test]
+    fn test_type_mismatch_fallthrough() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES (1, 'hello')) AS t(id, val);
+             CREATE TABLE source_b AS SELECT * FROM (VALUES (1, 'hello')) AS t(id, val);"
+        ).unwrap();
+
+        let cols: Vec<String> = vec!["val".into()];
+        let col_types: HashMap<String, String> =
+            [("val".to_string(), "VARCHAR".to_string())].into_iter().collect();
+        // Precision on a VARCHAR — falls through to IS DISTINCT FROM
+        let col_tol: HashMap<String, ColumnTolerance> =
+            [("val".to_string(), ColumnTolerance::Precision { precision: 3 })].into_iter().collect();
+
+        let result = run_diff(&conn, "id", &cols, &col_types, None, &col_tol).unwrap();
+        let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
+        assert_eq!(val.diff_count, 0);
     }
 }
