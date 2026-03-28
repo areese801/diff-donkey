@@ -36,18 +36,18 @@
   }
 
   async function handleRunDiff(
-    selectedPk: string,
+    selectedPks: string[],
     tolerance: number | null,
     columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
   ) {
     isLoading.set(true);
     diffError = null;
-    pkColumn.set(selectedPk);
+    pkColumn.set(selectedPks.join(", "));
 
     try {
       const isFirstRun = !$diffResult;
       const result = await runDiff({
-        pk_column: selectedPk,
+        pk_columns: selectedPks,
         tolerance,
         column_tolerances: columnTolerances,
       });

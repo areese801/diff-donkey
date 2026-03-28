@@ -15,48 +15,52 @@ use crate::types::PagedRows;
 pub fn get_exclusive_rows(
     conn: &Connection,
     side: &str,
-    pk_column: &str,
+    pk_columns: &[String],
     page: usize,
     page_size: usize,
 ) -> Result<PagedRows, DiffDonkeyError> {
-    let (source_table, null_check) = match side {
-        "a" => ("source_a", "pk_b IS NULL"),
-        "b" => ("source_b", "pk_a IS NULL"),
+    let (source_table, null_side) = match side {
+        "a" => ("source_a", "b"),
+        "b" => ("source_b", "a"),
         _ => return Err(DiffDonkeyError::Validation(format!("Invalid side: {}", side))),
     };
 
-    // Get total count
+    // All opposite-side PK columns must be NULL
+    let null_check = pk_columns.iter()
+        .map(|pk| format!("\"pk_{}_{}\" IS NULL", pk, null_side))
+        .collect::<Vec<_>>().join(" AND ");
+
     let total: i64 = conn.query_row(
         &format!("SELECT COUNT(*) FROM _diff_join WHERE {}", null_check),
-        [],
-        |row| row.get(0),
+        [], |row| row.get(0),
     )?;
 
-    // Get the actual PKs that are exclusive
     let offset = page * page_size;
-    let pk_col_ref = if side == "a" { "pk_a" } else { "pk_b" };
-
-    // Get column names from the source table
     let columns = get_table_columns(conn, source_table)?;
 
-    // Query the source table for rows matching exclusive PKs
+    // Select PK columns from _diff_join, join back to source
+    let pk_select = pk_columns.iter()
+        .map(|pk| format!("\"pk_{}_{}\"", pk, side))
+        .collect::<Vec<_>>().join(", ");
+
+    let join_conds = pk_columns.iter()
+        .map(|pk| format!("s.\"{}\" = excl.\"pk_{}_{}\"", pk, pk, side))
+        .collect::<Vec<_>>().join(" AND ");
+
+    let order_by = pk_columns.iter()
+        .map(|pk| format!("s.\"{}\"", pk))
+        .collect::<Vec<_>>().join(", ");
+
     let sql = format!(
         "SELECT s.* FROM {} s \
-         INNER JOIN (SELECT {} as pk FROM _diff_join WHERE {} LIMIT {} OFFSET {}) excl \
-         ON s.\"{}\" = excl.pk \
-         ORDER BY s.\"{}\"",
-        source_table, pk_col_ref, null_check, page_size, offset, pk_column, pk_column
+         INNER JOIN (SELECT {} FROM _diff_join WHERE {} LIMIT {} OFFSET {}) excl \
+         ON {} ORDER BY {}",
+        source_table, pk_select, null_check, page_size, offset, join_conds, order_by
     );
 
     let rows = query_to_rows(conn, &sql, &columns)?;
 
-    Ok(PagedRows {
-        columns,
-        rows,
-        total,
-        page,
-        page_size,
-    })
+    Ok(PagedRows { columns, rows, total, page, page_size })
 }
 
 /// Get duplicate primary keys in a source table.
@@ -66,7 +70,7 @@ pub fn get_exclusive_rows(
 pub fn get_duplicate_pks(
     conn: &Connection,
     side: &str,
-    pk_column: &str,
+    pk_columns: &[String],
     page: usize,
     page_size: usize,
 ) -> Result<PagedRows, DiffDonkeyError> {
@@ -76,34 +80,35 @@ pub fn get_duplicate_pks(
         _ => return Err(DiffDonkeyError::Validation(format!("Invalid side: {}", side))),
     };
 
-    // Count duplicate PKs
+    let group_cols = pk_columns.iter()
+        .map(|pk| format!("\"{}\"", pk))
+        .collect::<Vec<_>>().join(", ");
+
     let total: i64 = conn.query_row(
         &format!(
-            "SELECT COUNT(*) FROM (SELECT \"{}\" FROM {} GROUP BY \"{}\" HAVING COUNT(*) > 1)",
-            pk_column, source_table, pk_column
+            "SELECT COUNT(*) FROM (SELECT {} FROM {} GROUP BY {} HAVING COUNT(*) > 1)",
+            group_cols, source_table, group_cols
         ),
-        [],
-        |row| row.get(0),
+        [], |row| row.get(0),
     )?;
 
     let offset = page * page_size;
-    let columns = vec![pk_column.to_string(), "count".to_string()];
+    let mut columns: Vec<String> = pk_columns.to_vec();
+    columns.push("count".to_string());
+
+    let order_cols = pk_columns.iter()
+        .map(|pk| format!("\"{}\"", pk))
+        .collect::<Vec<_>>().join(", ");
 
     let sql = format!(
-        "SELECT \"{}\", COUNT(*) as count FROM {} GROUP BY \"{}\" HAVING COUNT(*) > 1 \
-         ORDER BY count DESC, \"{}\" LIMIT {} OFFSET {}",
-        pk_column, source_table, pk_column, pk_column, page_size, offset
+        "SELECT {}, COUNT(*) as count FROM {} GROUP BY {} HAVING COUNT(*) > 1 \
+         ORDER BY count DESC, {} LIMIT {} OFFSET {}",
+        group_cols, source_table, group_cols, order_cols, page_size, offset
     );
 
     let rows = query_to_rows(conn, &sql, &columns)?;
 
-    Ok(PagedRows {
-        columns,
-        rows,
-        total,
-        page,
-        page_size,
-    })
+    Ok(PagedRows { columns, rows, total, page, page_size })
 }
 
 /// Helper: get column names for a table.
@@ -200,14 +205,14 @@ mod tests {
             "status".into(),
             "created_at".into(),
         ];
-        stats::run_diff(&conn, "id", &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new()).unwrap();
+        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new()).unwrap();
         conn
     }
 
     #[test]
     fn test_exclusive_rows_a() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "a", "id", 0, 50).unwrap();
+        let result = get_exclusive_rows(&conn, "a", &["id".to_string()], 0, 50).unwrap();
 
         // Row 8 (Henry Wilson) only exists in A
         assert_eq!(result.total, 1);
@@ -217,7 +222,7 @@ mod tests {
     #[test]
     fn test_exclusive_rows_b() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "b", "id", 0, 50).unwrap();
+        let result = get_exclusive_rows(&conn, "b", &["id".to_string()], 0, 50).unwrap();
 
         // Row 11 (Karen Martinez) only exists in B
         assert_eq!(result.total, 1);
@@ -227,7 +232,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_pks() {
         let conn = setup_diff_conn();
-        let result = get_duplicate_pks(&conn, "a", "id", 0, 50).unwrap();
+        let result = get_duplicate_pks(&conn, "a", &["id".to_string()], 0, 50).unwrap();
 
         assert_eq!(result.total, 0);
         assert_eq!(result.rows.len(), 0);

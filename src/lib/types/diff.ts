@@ -84,7 +84,7 @@ export type ColumnTolerance =
 
 /** Diff configuration sent to the backend */
 export interface DiffConfig {
-  pk_column: string;
+  pk_columns: string[];
   tolerance: number | null;
   column_tolerances: Record<string, ColumnTolerance> | null;
 }

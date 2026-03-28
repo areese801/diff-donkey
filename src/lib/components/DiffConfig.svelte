@@ -4,13 +4,13 @@
 
   interface Props {
     columns: ColumnInfo[];
-    onRunDiff: (pkColumn: string, tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null) => void;
+    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null) => void;
     isLoading: boolean;
   }
 
   let { columns, onRunDiff, isLoading }: Props = $props();
 
-  let selectedPk = $state("");
+  let selectedPks: string[] = $state([]);
   let precisionInput = $state("");
   let showPerColumn = $state(false);
   let perColumnMode: Record<string, string> = $state({});
@@ -32,7 +32,7 @@
   }
 
   let nonPkColumns = $derived(
-    columns.filter(c => c.name !== selectedPk)
+    columns.filter(c => !selectedPks.includes(c.name))
   );
 
   function modesForType(dataType: string): { value: string; label: string }[] {
@@ -89,7 +89,7 @@
     }
 
     const hasTols = Object.keys(colTols).length > 0;
-    onRunDiff(selectedPk, prec, hasTols ? colTols : null);
+    onRunDiff(selectedPks, prec, hasTols ? colTols : null);
   }
 
   function needsValueInput(mode: string): boolean {
@@ -99,9 +99,8 @@
 
 <div class="diff-config">
   <div class="config-row">
-    <label for="pk-select">Primary Key Column:</label>
-    <select id="pk-select" bind:value={selectedPk} disabled={isLoading}>
-      <option value="" disabled>Select a column...</option>
+    <label for="pk-select">Primary Key:</label>
+    <select id="pk-select" multiple bind:value={selectedPks} disabled={isLoading} class="pk-multi-select">
       {#each columns as col}
         <option value={col.name}>{col.name} ({col.data_type})</option>
       {/each}
@@ -121,7 +120,7 @@
 
     <button
       onclick={handleRun}
-      disabled={!selectedPk || isLoading}
+      disabled={selectedPks.length === 0 || isLoading}
     >
       {isLoading ? "Running..." : "Run Diff"}
     </button>
@@ -181,6 +180,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .pk-multi-select {
+    min-height: 60px;
+    max-height: 100px;
+    min-width: 180px;
   }
 
   label {

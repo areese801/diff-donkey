@@ -112,11 +112,17 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    let pk_column = &config.pk_column;
+    let pk_columns = &config.pk_columns;
 
-    // SECURITY: Validate pk_column exists in both source tables.
-    validate_column_exists(&conn, "source_a", pk_column)?;
-    validate_column_exists(&conn, "source_b", pk_column)?;
+    // SECURITY: Validate each PK column exists in both source tables.
+    for pk in pk_columns {
+        validate_column_exists(&conn, "source_a", pk)?;
+        validate_column_exists(&conn, "source_b", pk)?;
+    }
+
+    if pk_columns.is_empty() {
+        return Err("At least one primary key column is required".to_string());
+    }
 
     // Validate global precision
     if let Some(prec) = config.tolerance {
@@ -147,12 +153,12 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         }
     }
 
-    // Get shared columns (excluding PK) to compare
+    // Get shared columns (excluding PKs) to compare
     let schema = diff::schema::compare_schemas(&conn).map_err(|e| e.to_string())?;
     let compare_columns: Vec<String> = schema
         .shared
         .iter()
-        .filter(|c| c.name != *pk_column)
+        .filter(|c| !pk_columns.contains(&c.name))
         .map(|c| c.name.clone())
         .collect();
 
@@ -160,20 +166,21 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
     let column_types: std::collections::HashMap<String, String> = schema
         .shared
         .iter()
-        .filter(|c| c.name != *pk_column)
+        .filter(|c| !pk_columns.contains(&c.name))
         .map(|c| (c.name.clone(), c.type_a.clone()))
         .collect();
 
-    // SECURITY: Store PK column name using a parameterized query.
+    // Store PK columns as JSON array in _diff_meta
+    let pk_json = serde_json::to_string(pk_columns).map_err(|e| e.to_string())?;
     conn.execute(
-        "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_column",
-        [pk_column],
+        "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_columns",
+        [&pk_json],
     )
     .map_err(|e| e.to_string())?;
 
     diff::stats::run_diff(
         &conn,
-        pk_column,
+        pk_columns,
         &compare_columns,
         &column_types,
         config.tolerance,
@@ -182,10 +189,13 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
     .map_err(|e: DiffDonkeyError| e.into())
 }
 
-/// Helper: get the PK column name from the stored diff metadata.
-fn get_pk_column(conn: &duckdb::Connection) -> Result<String, String> {
-    conn.query_row("SELECT pk_column FROM _diff_meta", [], |row| row.get(0))
-        .map_err(|_| "Diff not run yet — run diff first".to_string())
+/// Helper: get PK column names from the stored diff metadata.
+fn get_pk_columns(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
+    let json_str: String = conn
+        .query_row("SELECT pk_columns FROM _diff_meta", [], |row| row.get(0))
+        .map_err(|_| "Diff not run yet — run diff first".to_string())?;
+    serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse PK columns: {}", e))
 }
 
 /// Get exclusive rows — rows that exist only in one side.
@@ -201,9 +211,9 @@ pub fn get_exclusive_rows(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pk = get_pk_column(&conn)?;
+    let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_exclusive_rows(&conn, &side, &pk, page, page_size)
+    diff::keys::get_exclusive_rows(&conn, &side, &pks, page, page_size)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -220,9 +230,9 @@ pub fn get_duplicate_pks(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pk = get_pk_column(&conn)?;
+    let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_duplicate_pks(&conn, &side, &pk, page, page_size)
+    diff::keys::get_duplicate_pks(&conn, &side, &pks, page, page_size)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -274,10 +284,33 @@ pub fn get_diff_rows(
             .join(" OR ")
     };
 
-    let where_clause = format!(
-        "pk_a IS NOT NULL AND pk_b IS NOT NULL AND ({})",
-        diff_filter
-    );
+    // Build composite PK NOT NULL check from _diff_join schema
+    let mut pk_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'pk_%_a' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let pk_a_cols: Vec<String> = pk_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let pk_not_null = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\" IS NOT NULL", c))
+        .chain(
+            pk_a_cols
+                .iter()
+                .map(|c| format!("\"{}\" IS NOT NULL", c.replace("_a", "_b"))),
+        )
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    let where_clause = format!("{} AND ({})", pk_not_null, diff_filter);
 
     // Count total matching rows
     let total: i64 = conn
@@ -320,9 +353,15 @@ pub fn get_diff_rows(
         .join(", ");
     let offset = page * page_size;
 
+    let order_by = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let sql = format!(
-        "SELECT {} FROM _diff_join WHERE {} ORDER BY pk_a, pk_b LIMIT {} OFFSET {}",
-        select_cols, where_clause, page_size, offset
+        "SELECT {} FROM _diff_join WHERE {} ORDER BY {} LIMIT {} OFFSET {}",
+        select_cols, where_clause, order_by, page_size, offset
     );
 
     let rows = diff::keys::query_to_rows_public(&conn, &sql, &all_columns)

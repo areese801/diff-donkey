@@ -118,7 +118,7 @@ pub enum ColumnTolerance {
 /// Resolution: column_tolerances[col] → auto-apply Precision(tolerance) if numeric → IS DISTINCT FROM.
 #[derive(Debug, serde::Deserialize)]
 pub struct DiffConfig {
-    pub pk_column: String,
+    pub pk_columns: Vec<String>,
     pub tolerance: Option<i32>,
     pub column_tolerances: Option<std::collections::HashMap<String, ColumnTolerance>>,
 }
