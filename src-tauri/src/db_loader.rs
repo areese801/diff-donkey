@@ -23,7 +23,7 @@ pub enum DatabaseType {
 
 impl DatabaseType {
     /// Returns the DuckDB extension name to INSTALL and LOAD.
-    fn extension_name(&self) -> &'static str {
+    pub fn extension_name(&self) -> &'static str {
         match self {
             DatabaseType::Postgres => "postgres",
             DatabaseType::MySQL => "mysql",
@@ -31,7 +31,7 @@ impl DatabaseType {
     }
 
     /// Returns the DuckDB function name for querying the remote database.
-    fn query_function(&self) -> &'static str {
+    pub fn query_function(&self) -> &'static str {
         match self {
             DatabaseType::Postgres => "postgres_query",
             DatabaseType::MySQL => "mysql_query",

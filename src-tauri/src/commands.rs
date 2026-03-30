@@ -12,12 +12,15 @@
 /// strings. Every IPC parameter must be validated before use in SQL.
 use tauri::State;
 
+use crate::connections::{self, SavedConnection};
 use crate::db::DuckDbState;
 use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
-use crate::types::{ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta};
+use crate::types::{
+    ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
+};
 
 /// Maximum rows per page to prevent memory exhaustion via large page_size.
 const MAX_PAGE_SIZE: usize = 1000;
@@ -114,18 +117,23 @@ pub fn load_database_source(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type)
-        .map_err(|e: DiffDonkeyError| {
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
+        |e: DiffDonkeyError| {
             // SECURITY: Sanitize connection errors to avoid leaking credentials.
             // The full error is logged to stderr for debugging.
             let msg = e.to_string();
             eprintln!("Database load error: {}", msg);
-            if msg.contains("connection") || msg.contains("authentication") || msg.contains("password") {
-                "Database connection failed. Check your connection string and credentials.".to_string()
+            if msg.contains("connection")
+                || msg.contains("authentication")
+                || msg.contains("password")
+            {
+                "Database connection failed. Check your connection string and credentials."
+                    .to_string()
             } else {
                 e.into()
             }
-        })
+        },
+    )
 }
 
 /// Compare schemas of the two loaded sources.
@@ -233,8 +241,7 @@ fn get_pk_columns(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
     let json_str: String = conn
         .query_row("SELECT pk_columns FROM _diff_meta", [], |row| row.get(0))
         .map_err(|_| "Diff not run yet — run diff first".to_string())?;
-    serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse PK columns: {}", e))
+    serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse PK columns: {}", e))
 }
 
 /// Get exclusive rows — rows that exist only in one side.
@@ -403,8 +410,8 @@ pub fn get_diff_rows(
         select_cols, where_clause, order_by, page_size, offset
     );
 
-    let rows = diff::keys::query_to_rows_public(&conn, &sql, &all_columns)
-        .map_err(|e| e.to_string())?;
+    let rows =
+        diff::keys::query_to_rows_public(&conn, &sql, &all_columns).map_err(|e| e.to_string())?;
 
     Ok(PagedRows {
         columns: all_columns,
@@ -413,4 +420,134 @@ pub fn get_diff_rows(
         page,
         page_size,
     })
+}
+
+// ─── Connection Management Commands ─────────────────────────────────────────
+
+/// List all saved database connections.
+#[tauri::command]
+pub fn list_saved_connections(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<SavedConnection>, String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::list_connections(&path).map_err(|e| e.to_string())
+}
+
+/// Save (create or update) a database connection.
+/// Password is stored separately in the OS keychain.
+#[tauri::command]
+pub fn save_connection(
+    app_handle: tauri::AppHandle,
+    conn: SavedConnection,
+    password: Option<String>,
+) -> Result<(), String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::save_connection(&path, conn, password).map_err(|e| {
+        eprintln!("Save connection error: {}", e);
+        e.to_string()
+    })
+}
+
+/// Delete a saved connection by ID.
+#[tauri::command]
+pub fn delete_connection(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::delete_connection(&path, &id).map_err(|e| e.to_string())
+}
+
+/// Test a database connection by attempting a simple query.
+#[tauri::command]
+pub fn test_connection(
+    conn: SavedConnection,
+    password: Option<String>,
+    state: State<DuckDbState>,
+) -> Result<String, String> {
+    let duck_conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    connections::test_connection(&duck_conn, &conn, password.as_deref()).map_err(|e| {
+        let msg = e.to_string();
+        eprintln!("Test connection error: {}", msg);
+        if msg.contains("connection") || msg.contains("authentication") || msg.contains("password")
+        {
+            "Connection failed. Check your host, credentials, and network.".to_string()
+        } else {
+            msg
+        }
+    })
+}
+
+/// Load data from a saved connection into DuckDB as source_a or source_b.
+///
+/// Retrieves the password from the OS keychain, builds the connection string,
+/// and delegates to the existing db_loader infrastructure.
+#[tauri::command]
+pub fn load_from_saved_connection(
+    id: String,
+    query: String,
+    label: String,
+    app_handle: tauri::AppHandle,
+    state: State<DuckDbState>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+
+    // Look up the saved connection
+    let path = connections::get_connections_path(&app_handle);
+    let all_connections = connections::list_connections(&path).map_err(|e| e.to_string())?;
+    let saved = all_connections
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("Connection '{}' not found", id))?;
+
+    // Retrieve password from keychain
+    let password = connections::get_password(&id).map_err(|e| {
+        eprintln!("Keyring error: {}", e);
+        "Failed to retrieve stored password. You may need to re-enter it.".to_string()
+    })?;
+
+    // Build connection string
+    let conn_string = connections::build_connection_string(saved, password.as_deref());
+    if conn_string.trim().is_empty() {
+        return Err("Could not build connection string — check connection settings.".to_string());
+    }
+
+    // Determine database type for DuckDB extension
+    let db_type = match saved.db_type.as_str() {
+        "postgres" => db_loader::DatabaseType::Postgres,
+        "mysql" => db_loader::DatabaseType::MySQL,
+        _ => {
+            return Err(format!(
+                "Database type '{}' not yet supported for loading",
+                saved.db_type
+            ))
+        }
+    };
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
+        |e: DiffDonkeyError| {
+            let msg = e.to_string();
+            eprintln!("Database load error: {}", msg);
+            if msg.contains("connection")
+                || msg.contains("authentication")
+                || msg.contains("password")
+            {
+                "Database connection failed. Check your connection settings and credentials."
+                    .to_string()
+            } else {
+                e.into()
+            }
+        },
+    )
 }

@@ -3,6 +3,7 @@
   import { loadSource } from "$lib/tauri";
   import { sourceA, sourceB } from "$lib/stores/config";
   import DatabaseSource from "$lib/components/DatabaseSource.svelte";
+  import ConnectionManager from "$lib/components/ConnectionManager.svelte";
   import type { TableMeta } from "$lib/types/diff";
 
   type SourceMode = "file" | "database";
@@ -16,6 +17,7 @@
   let errorB: string | null = $state(null);
   let loadingA = $state(false);
   let loadingB = $state(false);
+  let showConnectionManager = $state(false);
 
   async function pickFile(label: "a" | "b") {
     const selected = await open({
@@ -74,6 +76,16 @@
 </script>
 
 <div class="source-selector">
+  <div class="manage-row">
+    <button class="manage-btn" onclick={() => (showConnectionManager = true)}>
+      Manage Connections
+    </button>
+  </div>
+
+  {#if showConnectionManager}
+    <ConnectionManager onClose={() => (showConnectionManager = false)} />
+  {/if}
+
   <div class="source-panel">
     <h3>Source A</h3>
     <div class="mode-toggle">
@@ -159,6 +171,27 @@
     grid-template-columns: 1fr 1fr;
     gap: 24px;
     padding: 16px;
+  }
+
+  .manage-row {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .manage-btn {
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.8em;
+    color: #888;
+  }
+
+  .manage-btn:hover {
+    color: #396cd8;
+    border-color: #396cd8;
   }
 
   .source-panel {

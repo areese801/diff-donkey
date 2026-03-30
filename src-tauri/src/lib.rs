@@ -1,4 +1,5 @@
 mod commands;
+mod connections;
 mod db;
 mod db_loader;
 mod diff;
@@ -21,6 +22,11 @@ pub fn run() {
             commands::get_exclusive_rows,
             commands::get_duplicate_pks,
             commands::get_diff_rows,
+            commands::list_saved_connections,
+            commands::save_connection,
+            commands::delete_connection,
+            commands::test_connection,
+            commands::load_from_saved_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
