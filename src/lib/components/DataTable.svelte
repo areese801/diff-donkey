@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { diffChars } from "diff";
   import type { PagedRows } from "$lib/types/diff";
 
   interface Props {
@@ -6,15 +7,75 @@
     loading: boolean;
     onPageChange: (page: number) => void;
     highlightDiffs?: boolean;
+    charDiffs?: boolean;
+    precision?: number | null;
   }
 
-  let { data, loading, onPageChange, highlightDiffs = false }: Props = $props();
+  let { data, loading, onPageChange, highlightDiffs = false, charDiffs = true, precision = null }: Props = $props();
+
+  /**
+   * Format a cell value for display. When precision is set and the value
+   * is numeric, truncate to that many decimal places to match the comparison.
+   */
+  function formatValue(val: unknown): string {
+    if (val === null || val === undefined) return "NULL";
+    if (precision !== null && precision >= 0 && typeof val === "number" && !Number.isInteger(val)) {
+      // Truncate (not round) to match TRUNC behavior
+      const factor = Math.pow(10, precision);
+      const truncated = Math.trunc(val * factor) / factor;
+      return truncated.toFixed(precision);
+    }
+    return String(val);
+  }
 
   let totalPages = $derived(data ? Math.ceil(data.total / data.page_size) : 0);
   /** Columns to display (filter out is_diff_* and is_raw_diff_* columns) */
   let displayColumns = $derived(
     data?.columns.filter(c => !c.startsWith("is_diff_") && !c.startsWith("is_raw_diff_")) ?? []
   );
+
+  /**
+   * Compute character-level diff parts for a cell value.
+   * Returns an array of { text, type } where type is "same", "removed", or "added".
+   * - For _a columns: shows "same" and "removed" parts
+   * - For _b columns: shows "same" and "added" parts
+   */
+  function charDiffParts(
+    row: Record<string, unknown>,
+    col: string,
+  ): { text: string; highlight: boolean }[] | null {
+    // Only compute for paired _a / _b columns with a diff
+    const isA = col.endsWith("_a");
+    const isB = col.endsWith("_b");
+    if (!isA && !isB) return null;
+
+    const baseCol = col.replace(/_[ab]$/, "");
+    const isDiffCol = `is_diff_${baseCol}`;
+    const isRawDiffCol = `is_raw_diff_${baseCol}`;
+    const hasDiff = row[isDiffCol] === 1 || row[isRawDiffCol] === 1;
+    if (!hasDiff) return null;
+
+    const valA = formatValue(row[`${baseCol}_a`]);
+    const valB = formatValue(row[`${baseCol}_b`]);
+
+    const changes = diffChars(valA, valB);
+    const parts: { text: string; highlight: boolean }[] = [];
+
+    for (const change of changes) {
+      if (change.added) {
+        // This part only exists in B
+        if (isB) parts.push({ text: change.value, highlight: true });
+      } else if (change.removed) {
+        // This part only exists in A
+        if (isA) parts.push({ text: change.value, highlight: true });
+      } else {
+        // Same in both
+        parts.push({ text: change.value, highlight: false });
+      }
+    }
+
+    return parts.length > 0 ? parts : null;
+  }
 </script>
 
 {#if loading}
@@ -40,8 +101,19 @@
               {@const isRawDiffCol = `is_raw_diff_${baseCol}`}
               {@const hasDiff = highlightDiffs && row[isDiffCol] === 1}
               {@const hasMinorDiff = highlightDiffs && row[isDiffCol] !== 1 && row[isRawDiffCol] === 1}
+              {@const parts = highlightDiffs && charDiffs ? charDiffParts(row, col) : null}
               <td class:diff-cell={hasDiff} class:minor-diff-cell={hasMinorDiff}>
-                {row[col] ?? "NULL"}
+                {#if parts}
+                  {#each parts as part}
+                    {#if part.highlight}
+                      <span class="char-diff">{part.text}</span>
+                    {:else}
+                      {part.text}
+                    {/if}
+                  {/each}
+                {:else}
+                  {formatValue(row[col])}
+                {/if}
               </td>
             {/each}
           </tr>
@@ -126,6 +198,21 @@
     font-weight: 500;
   }
 
+  .char-diff {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 2px;
+    padding: 0 1px;
+    font-weight: 700;
+  }
+
+  .diff-cell .char-diff {
+    background: #ffb3b3;
+  }
+
+  .minor-diff-cell .char-diff {
+    background: #ffe0a0;
+  }
+
   .pagination {
     display: flex;
     align-items: center;
@@ -169,6 +256,18 @@
     .minor-diff-cell {
       background: #4a4020;
       color: #ffcc66;
+    }
+
+    .char-diff {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .diff-cell .char-diff {
+      background: #7a3030;
+    }
+
+    .minor-diff-cell .char-diff {
+      background: #7a6030;
     }
 
     .pagination button {

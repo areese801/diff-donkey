@@ -52,6 +52,7 @@ export interface DiffStats {
 export interface ColumnDiffStats {
   name: string;
   diff_count: number;
+  minor_count: number;
   match_count: number;
   total: number;
   match_pct: number;

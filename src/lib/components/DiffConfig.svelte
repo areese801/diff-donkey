@@ -12,6 +12,22 @@
 
   let selectedPks: string[] = $state([]);
   let precisionInput = $state("");
+
+  // Auto-select PK columns: first column named "id" or ending in "_id"
+  $effect(() => {
+    if (columns.length > 0 && selectedPks.length === 0) {
+      const autoDetected = columns
+        .filter(c => {
+          const lower = c.name.toLowerCase();
+          return lower === "id" || lower.endsWith("_id");
+        })
+        .map(c => c.name);
+      if (autoDetected.length > 0) {
+        selectedPks = autoDetected;
+      }
+    }
+  });
+  let ignoreCase = $state(false);
   let showPerColumn = $state(false);
   let perColumnMode: Record<string, string> = $state({});
   let perColumnValue: Record<string, string> = $state({});
@@ -88,6 +104,16 @@
       }
     }
 
+    // Apply global case-insensitive toggle to string columns not already overridden
+    if (ignoreCase) {
+      for (const col of nonPkColumns) {
+        if (col.name in colTols) continue; // per-column override takes precedence
+        if (!isNumericType(col.data_type) && !isTimestampType(col.data_type)) {
+          colTols[col.name] = { mode: "case_insensitive" };
+        }
+      }
+    }
+
     const hasTols = Object.keys(colTols).length > 0;
     onRunDiff(selectedPks, prec, hasTols ? colTols : null);
   }
@@ -106,7 +132,7 @@
       {/each}
     </select>
 
-    <label for="precision-input">Decimal Places:</label>
+    <label for="precision-input" title="Positive = decimal places (2 → hundredths). Negative = integer rounding (-1 → nearest 10, -2 → nearest 100).">Precision:</label>
     <input
       id="precision-input"
       type="number"
@@ -116,6 +142,11 @@
       disabled={isLoading}
       class="tolerance-input"
     />
+
+    <label class="ignore-case-toggle">
+      <input type="checkbox" bind:checked={ignoreCase} disabled={isLoading} />
+      Ignore Case
+    </label>
 
     <button
       onclick={handleRun}
@@ -185,6 +216,19 @@
     min-height: 60px;
     max-height: 100px;
     min-width: 180px;
+  }
+
+  .ignore-case-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85em;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .ignore-case-toggle input {
+    cursor: pointer;
   }
 
   label {

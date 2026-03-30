@@ -113,6 +113,7 @@
             <th>Column</th>
             <th>Match %</th>
             <th>Diffs</th>
+            <th>Minor</th>
             <th>Matches</th>
             <th></th>
           </tr>
@@ -125,6 +126,7 @@
                 {col.match_pct.toFixed(1)}%
               </td>
               <td class:has-diffs={col.diff_count > 0}>{col.diff_count.toLocaleString()}</td>
+              <td class:has-minor={col.minor_count > 0}>{col.minor_count.toLocaleString()}</td>
               <td>{col.match_count.toLocaleString()}</td>
               <td>
                 <div class="mini-bar">
@@ -296,6 +298,11 @@
 
   .has-diffs {
     color: #e74c3c;
+    font-weight: 500;
+  }
+
+  .has-minor {
+    color: #e67e22;
     font-weight: 500;
   }
 

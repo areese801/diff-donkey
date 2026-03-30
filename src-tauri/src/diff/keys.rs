@@ -166,15 +166,21 @@ fn query_to_rows(
 /// Tries multiple types since DuckDB columns can be various types.
 /// Falls back to string representation.
 fn row_value_to_json(row: &duckdb::Row, idx: usize) -> serde_json::Value {
-    // Try i64 first (covers INTEGER, BIGINT)
-    if let Ok(v) = row.get::<_, i64>(idx) {
-        return serde_json::Value::Number(v.into());
-    }
-    // Try f64 (covers DOUBLE, FLOAT, DECIMAL)
+    // Try f64 first (covers DOUBLE, FLOAT, DECIMAL, and also integers).
+    // If the value has no fractional part, emit as i64 for cleaner display.
+    // We try f64 before i64 because DuckDB will truncate 150.1234 to 150
+    // when reading as i64, losing decimal precision.
     if let Ok(v) = row.get::<_, f64>(idx) {
+        if v.fract() == 0.0 && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
+            return serde_json::Value::Number((v as i64).into());
+        }
         if let Some(n) = serde_json::Number::from_f64(v) {
             return serde_json::Value::Number(n);
         }
+    }
+    // Try i64 as fallback (covers BIGINT values that can't be represented as f64)
+    if let Ok(v) = row.get::<_, i64>(idx) {
+        return serde_json::Value::Number(v.into());
     }
     // Try bool
     if let Ok(v) = row.get::<_, bool>(idx) {

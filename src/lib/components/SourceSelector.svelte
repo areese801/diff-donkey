@@ -11,6 +11,8 @@
   /** Current state for each source panel */
   let modeA: SourceMode = $state("file");
   let modeB: SourceMode = $state("file");
+  let pathA: string = $state(localStorage.getItem("diff-donkey:pathA") ?? "");
+  let pathB: string = $state(localStorage.getItem("diff-donkey:pathB") ?? "");
   let metaA: TableMeta | null = $state(null);
   let metaB: TableMeta | null = $state(null);
   let errorA: string | null = $state(null);
@@ -19,22 +21,41 @@
   let loadingB = $state(false);
   let showConnectionManager = $state(false);
 
+  /** Extract just the filename from a full path */
+  function filename(path: string): string {
+    return path.split("/").pop()?.split("\\").pop() ?? path;
+  }
+
+  /** Extract the directory from a full path for defaultPath */
+  function dirname(path: string): string {
+    const sep = path.includes("\\") ? "\\" : "/";
+    const parts = path.split(sep);
+    parts.pop();
+    return parts.join(sep);
+  }
+
   async function pickFile(label: "a" | "b") {
+    const lastPath = label === "a" ? pathA : pathB;
     const selected = await open({
       multiple: false,
+      defaultPath: lastPath ? dirname(lastPath) : undefined,
       filters: [
         { name: "Data Files", extensions: ["csv", "parquet", "pq"] },
       ],
     });
 
-    if (!selected) return; // User cancelled
+    if (!selected) return;
 
     const path = typeof selected === "string" ? selected : selected;
 
     if (label === "a") {
+      pathA = path;
+      localStorage.setItem("diff-donkey:pathA", path);
       loadingA = true;
       errorA = null;
     } else {
+      pathB = path;
+      localStorage.setItem("diff-donkey:pathB", path);
       loadingB = true;
       errorB = null;
     }
@@ -63,6 +84,53 @@
       }
     }
   }
+
+  /** Load a file by path (without opening dialog) */
+  async function loadFileByPath(path: string, label: "a" | "b") {
+    if (!path) return;
+
+    if (label === "a") {
+      loadingA = true;
+      errorA = null;
+    } else {
+      loadingB = true;
+      errorB = null;
+    }
+
+    try {
+      const meta = await loadSource(path, label);
+      if (label === "a") {
+        metaA = meta;
+        sourceA.set(meta);
+      } else {
+        metaB = meta;
+        sourceB.set(meta);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (label === "a") {
+        errorA = msg;
+        pathA = ""; // clear invalid saved path
+        localStorage.removeItem("diff-donkey:pathA");
+      } else {
+        errorB = msg;
+        pathB = "";
+        localStorage.removeItem("diff-donkey:pathB");
+      }
+    } finally {
+      if (label === "a") {
+        loadingA = false;
+      } else {
+        loadingB = false;
+      }
+    }
+  }
+
+  // Auto-load saved files on startup
+  $effect(() => {
+    if (pathA && !metaA) loadFileByPath(pathA, "a");
+    if (pathB && !metaB) loadFileByPath(pathB, "b");
+  });
 
   function handleDbLoaded(label: "a" | "b", meta: TableMeta) {
     if (label === "a") {
@@ -102,9 +170,19 @@
     </div>
 
     {#if modeA === "file"}
-      <button class="pick-btn" onclick={() => pickFile("a")} disabled={loadingA}>
-        {loadingA ? "Loading..." : metaA ? "Change File" : "Select File"}
-      </button>
+      <div class="file-picker">
+        <input
+          type="text"
+          class="file-path"
+          value={pathA ? filename(pathA) : ""}
+          placeholder="No file selected"
+          readonly
+          title={pathA || "No file selected"}
+        />
+        <button class="browse-btn" onclick={() => pickFile("a")} disabled={loadingA}>
+          {loadingA ? "..." : "Browse"}
+        </button>
+      </div>
 
       {#if errorA}
         <p class="error">{errorA}</p>
@@ -141,9 +219,19 @@
     </div>
 
     {#if modeB === "file"}
-      <button class="pick-btn" onclick={() => pickFile("b")} disabled={loadingB}>
-        {loadingB ? "Loading..." : metaB ? "Change File" : "Select File"}
-      </button>
+      <div class="file-picker">
+        <input
+          type="text"
+          class="file-path"
+          value={pathB ? filename(pathB) : ""}
+          placeholder="No file selected"
+          readonly
+          title={pathB || "No file selected"}
+        />
+        <button class="browse-btn" onclick={() => pickFile("b")} disabled={loadingB}>
+          {loadingB ? "..." : "Browse"}
+        </button>
+      </div>
 
       {#if errorB}
         <p class="error">{errorB}</p>
@@ -234,23 +322,49 @@
     background: rgba(57, 108, 216, 0.1);
   }
 
-  .pick-btn {
-    width: 100%;
-    padding: 10px;
+  .file-picker {
+    display: flex;
+    gap: 0;
+    border: 1px solid #ccc;
     border-radius: 6px;
-    border: 2px dashed #ccc;
+    overflow: hidden;
+  }
+
+  .file-path {
+    flex: 1;
+    padding: 8px 10px;
+    border: none;
     background: transparent;
-    cursor: pointer;
-    font-size: 0.95em;
+    font-size: 0.9em;
     color: inherit;
+    outline: none;
+    cursor: default;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
-  .pick-btn:hover:not(:disabled) {
-    border-color: #396cd8;
-    color: #396cd8;
+  .file-path::placeholder {
+    color: #aaa;
   }
 
-  .pick-btn:disabled {
+  .browse-btn {
+    padding: 8px 16px;
+    border: none;
+    border-left: 1px solid #ccc;
+    background: #f0f0f0;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 500;
+    color: inherit;
+    white-space: nowrap;
+  }
+
+  .browse-btn:hover:not(:disabled) {
+    background: #e0e0e0;
+  }
+
+  .browse-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
@@ -300,13 +414,17 @@
       color: #1a1a1a;
     }
 
-    .pick-btn {
+    .file-picker {
       border-color: #555;
     }
 
-    .pick-btn:hover:not(:disabled) {
-      border-color: #24c8db;
-      color: #24c8db;
+    .browse-btn {
+      border-left-color: #555;
+      background: #3a3a3a;
+    }
+
+    .browse-btn:hover:not(:disabled) {
+      background: #4a4a4a;
     }
   }
 </style>

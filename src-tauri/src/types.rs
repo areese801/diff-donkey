@@ -61,6 +61,7 @@ pub struct DiffStats {
 pub struct ColumnDiffStats {
     pub name: String,
     pub diff_count: i64,
+    pub minor_count: i64,
     pub match_count: i64,
     pub total: i64,
     pub match_pct: f64,

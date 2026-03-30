@@ -11,7 +11,7 @@
 ///   NULL IS DISTINCT FROM 'x'  → true  (they differ)
 ///
 /// Tolerance modes override IS DISTINCT FROM with type-specific comparisons:
-///   Precision  → ROUND(a, N) = ROUND(b, N)
+///   Precision  → TRUNC(a, N) = TRUNC(b, N)
 ///   Seconds    → ABS(EPOCH(a) - EPOCH(b)) <= N
 ///   CaseInsensitive → LOWER(a) IS DISTINCT FROM LOWER(b)
 ///   Whitespace → TRIM(a) IS DISTINCT FROM TRIM(b)
@@ -238,7 +238,7 @@ fn tolerance_sql(col: &str, col_type: &str, tol: &ColumnTolerance) -> String {
             format!(
                 "CASE WHEN a.\"{}\" IS NULL AND b.\"{}\" IS NULL THEN 0 \
                  WHEN a.\"{}\" IS NULL OR b.\"{}\" IS NULL THEN 1 \
-                 WHEN ROUND(a.\"{}\"::DOUBLE, {}) = ROUND(b.\"{}\"::DOUBLE, {}) THEN 0 ELSE 1 END",
+                 WHEN TRUNC(a.\"{}\"::DOUBLE, {}) = TRUNC(b.\"{}\"::DOUBLE, {}) THEN 0 ELSE 1 END",
                 col, col, col, col, col, precision, col, precision
             )
         }
@@ -285,6 +285,10 @@ fn compute_diff_stats(
     let mut agg_parts = Vec::new();
     for col in compare_columns {
         agg_parts.push(format!("SUM(\"is_diff_{col}\")"));
+        // Minor = raw diff but not tolerance diff
+        agg_parts.push(format!(
+            "SUM(CASE WHEN \"is_raw_diff_{col}\" = 1 AND \"is_diff_{col}\" = 0 THEN 1 ELSE 0 END)"
+        ));
         agg_parts.push(format!("COUNT(*) - SUM(\"is_diff_{col}\")"));
     }
 
@@ -319,13 +323,15 @@ fn compute_diff_stats(
 
     let mut columns = Vec::new();
     for (i, col) in compare_columns.iter().enumerate() {
-        let diff_count: i64 = row.get(i * 2)?;
-        let match_count: i64 = row.get(i * 2 + 1)?;
+        let diff_count: i64 = row.get(i * 3)?;
+        let minor_count: i64 = row.get(i * 3 + 1)?;
+        let match_count: i64 = row.get(i * 3 + 2)?;
         let total = diff_count + match_count;
 
         columns.push(ColumnDiffStats {
             name: col.clone(),
             diff_count,
+            minor_count,
             match_count,
             total,
             match_pct: if total > 0 {
@@ -478,7 +484,7 @@ mod tests {
         assert_eq!(name_stats.diff_count, 1); // "Eve Davis" vs "eve davis"
 
         let amount_stats = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
-        assert_eq!(amount_stats.diff_count, 1); // 275.50 vs 280.00
+        assert_eq!(amount_stats.diff_count, 6); // rows 1,2,3,5,6,10 have decimal diffs
 
         let status_stats = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
         assert_eq!(status_stats.diff_count, 2); // pending→shipped, pending→completed
@@ -502,8 +508,8 @@ mod tests {
         let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol).unwrap();
 
         assert_eq!(result.values_summary.total_compared, 9);
-        assert_eq!(result.values_summary.rows_with_diffs, 4);
-        assert_eq!(result.values_summary.rows_identical, 5);
+        assert_eq!(result.values_summary.rows_with_diffs, 7); // rows 1,2,3,5,6,7,10
+        assert_eq!(result.values_summary.rows_identical, 2); // rows 4,9
     }
 
     // ── Type detection ────────────────────────────────────────────────────
@@ -607,17 +613,13 @@ mod tests {
             [("val".to_string(), "DOUBLE".to_string())].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        // precision=3 → ROUND(0.1234,3)=0.123, ROUND(0.1235,3)=0.124 (diff!)
-        //               ROUND(0.1234,3)=0.123, ROUND(0.1244,3)=0.124 (diff)
-        // Actually: ROUND(0.1235,3) in DuckDB uses banker's rounding → 0.124
-        // Let's use precision=2 for a clearer test:
-        // ROUND(0.1234,2)=0.12, ROUND(0.1235,2)=0.12 → match
-        // ROUND(0.1234,2)=0.12, ROUND(0.1244,2)=0.12 → match
+        // precision=2: TRUNC(0.1234,2)=0.12, TRUNC(0.1235,2)=0.12 → match
+        //              TRUNC(0.1234,2)=0.12, TRUNC(0.1244,2)=0.12 → match
         let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(2), &no_col_tol).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         assert_eq!(val.diff_count, 0); // both match at 2dp
 
-        // Now recreate and test with precision=3
+        // Now recreate and test with precision=3 (truncation, not rounding)
         conn.execute_batch("DROP TABLE source_a; DROP TABLE source_b;").unwrap();
         conn.execute_batch(
             "CREATE TABLE source_a AS SELECT * FROM (VALUES
@@ -630,11 +632,11 @@ mod tests {
             ) AS t(id, val);"
         ).unwrap();
 
-        // precision=3: ROUND(0.1234,3)=0.123, ROUND(0.1239,3)=0.124 → diff
-        //              ROUND(0.1234,3)=0.123, ROUND(0.1254,3)=0.125 → diff
+        // precision=3: TRUNC(0.1234,3)=0.123, TRUNC(0.1239,3)=0.123 → match!
+        //              TRUNC(0.1234,3)=0.123, TRUNC(0.1254,3)=0.125 → diff
         let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(3), &no_col_tol).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
-        assert_eq!(val.diff_count, 2);
+        assert_eq!(val.diff_count, 1);
     }
 
     #[test]
@@ -676,13 +678,13 @@ mod tests {
             [("val".to_string(), "DOUBLE".to_string())].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        // precision=0: ROUND(100.0,0)=100, ROUND(100.4,0)=100 → match
+        // precision=0: TRUNC(100.0,0)=100, TRUNC(100.4,0)=100 → match
         let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         // id=1: NULL vs NULL → match
         // id=2: NULL vs 100.0 → diff
         // id=3: 100.0 vs NULL → diff
-        // id=4: 100.0 vs 100.4 → match (both round to 100)
+        // id=4: 100.0 vs 100.4 → match (both truncate to 100)
         assert_eq!(val.diff_count, 2);
         assert_eq!(val.match_count, 2);
     }
@@ -715,13 +717,13 @@ mod tests {
         let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &col_tol).unwrap();
 
         let price = result.diff_stats.columns.iter().find(|c| c.name == "price").unwrap();
-        // precision=0: ROUND(100.0,0)=100, ROUND(100.4,0)=100 → match
-        //              ROUND(200.0,0)=200, ROUND(208.0,0)=208 → diff
+        // precision=0: TRUNC(100.0,0)=100, TRUNC(100.4,0)=100 → match
+        //              TRUNC(200.0,0)=200, TRUNC(208.0,0)=208 → diff
         assert_eq!(price.diff_count, 1);
 
         let weight = result.diff_stats.columns.iter().find(|c| c.name == "weight").unwrap();
-        // precision=2: ROUND(500.0,2)=500.0, ROUND(505.0,2)=505.0 → diff
-        //              ROUND(600.0,2)=600.0, ROUND(615.0,2)=615.0 → diff
+        // precision=2: TRUNC(500.0,2)=500.0, TRUNC(505.0,2)=505.0 → diff
+        //              TRUNC(600.0,2)=600.0, TRUNC(615.0,2)=615.0 → diff
         assert_eq!(weight.diff_count, 2);
     }
 
@@ -742,8 +744,8 @@ mod tests {
         let col_types: HashMap<String, String> =
             [("amount".to_string(), "DOUBLE".to_string())].into_iter().collect();
 
-        // Default precision=0 (would match: both round to 100), but per-column precision=1 (strict)
-        // ROUND(100.0,1)=100.0, ROUND(100.4,1)=100.4 → diff
+        // Default precision=0 (would match: both truncate to 100), but per-column precision=1 (strict)
+        // TRUNC(100.0,1)=100.0, TRUNC(100.4,1)=100.4 → diff
         let col_tol: HashMap<String, ColumnTolerance> =
             [("amount".to_string(), ColumnTolerance::Precision { precision: 1 })].into_iter().collect();
 
@@ -1053,8 +1055,8 @@ mod tests {
 
         assert_eq!(result.values_summary.rows_minor, 0);
         // Verify existing assertions still hold
-        assert_eq!(result.values_summary.rows_with_diffs, 4);
-        assert_eq!(result.values_summary.rows_identical, 5);
+        assert_eq!(result.values_summary.rows_with_diffs, 7);
+        assert_eq!(result.values_summary.rows_identical, 2);
     }
 
     #[test]

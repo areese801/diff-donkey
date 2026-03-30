@@ -7,12 +7,14 @@
   interface Props {
     columnStats: ColumnDiffStats[];
     valuesSummary?: ValuesSummary;
+    precision?: number | null;
   }
 
-  let { columnStats, valuesSummary }: Props = $props();
+  let { columnStats, valuesSummary, precision = null }: Props = $props();
 
   let selectedColumn: string | null = $state(null);
-  let rowFilter: string = $state("diffs");
+  let rowFilter: string = $state("all");
+  let charDiffs = $state(true);
   let data: PagedRows | null = $state(null);
   let loading = $state(false);
   const PAGE_SIZE = 50;
@@ -113,6 +115,11 @@
       >
         Same ({filterCounts().same.toLocaleString()})
       </button>
+
+      <label class="char-diff-toggle">
+        <input type="checkbox" bind:checked={charDiffs} />
+        Char diffs
+      </label>
     </section>
 
     <!-- Diff rows table -->
@@ -139,6 +146,8 @@
         {loading}
         onPageChange={(page) => fetchDiffRows(page)}
         highlightDiffs={true}
+        {charDiffs}
+        {precision}
       />
     </section>
   </div>
@@ -247,6 +256,21 @@
   .row-filter-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .char-diff-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.82em;
+    color: #888;
+    cursor: pointer;
+    margin-left: auto;
+    user-select: none;
+  }
+
+  .char-diff-toggle input {
+    cursor: pointer;
   }
 
   .diff-rows h3 {
