@@ -82,6 +82,7 @@ pub struct PkSummary {
 pub struct ValuesSummary {
     pub total_compared: i64,
     pub rows_with_diffs: i64,
+    pub rows_minor: i64,
     pub rows_identical: i64,
 }
 

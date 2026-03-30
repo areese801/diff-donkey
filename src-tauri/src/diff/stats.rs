@@ -107,10 +107,43 @@ pub fn run_diff(
 
     let matched_rows = total_rows - pk_summary.exclusive_a - pk_summary.exclusive_b;
 
+    // Compute rows_minor: tolerance-suppressed diffs (no real diffs, but at least one raw diff)
+    let rows_minor: i64 = if compare_columns.is_empty() {
+        0
+    } else {
+        let matched_filter = pk_columns
+            .iter()
+            .map(|pk| format!("\"pk_{}_a\" IS NOT NULL", pk))
+            .chain(pk_columns.iter().map(|pk| format!("\"pk_{}_b\" IS NOT NULL", pk)))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let no_real_diffs = compare_columns
+            .iter()
+            .map(|c| format!("\"is_diff_{}\" = 0", c))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let any_raw_diffs = compare_columns
+            .iter()
+            .map(|c| format!("\"is_raw_diff_{}\" = 1", c))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM _diff_join WHERE {} AND ({}) AND ({})",
+                matched_filter, no_real_diffs, any_raw_diffs
+            ),
+            [],
+            |row| row.get(0),
+        )?
+    };
+
     let values_summary = ValuesSummary {
         total_compared: matched_rows,
         rows_with_diffs,
-        rows_identical: matched_rows - rows_with_diffs,
+        rows_minor,
+        rows_identical: matched_rows - rows_with_diffs - rows_minor,
     };
 
     Ok(OverviewResult {
@@ -162,6 +195,12 @@ fn build_diff_join(
         };
 
         select_parts.push(format!("{} as \"is_diff_{}\"", is_diff_expr, col));
+
+        // Always add raw diff (pure IS DISTINCT FROM, no tolerance)
+        select_parts.push(format!(
+            "(a.\"{}\" IS DISTINCT FROM b.\"{}\")::INTEGER as \"is_raw_diff_{}\"",
+            col, col, col
+        ));
     }
 
     // JOIN clause: ON a."col1" = b."col1" AND a."col2" = b."col2"
@@ -948,5 +987,170 @@ mod tests {
         ).unwrap();
         assert_eq!(result.values_summary.total_compared, 2);
         assert_eq!(result.values_summary.rows_with_diffs, 1);
+    }
+
+    // ── Row minor / raw diff tests ───────────────────────────────────────
+
+    #[test]
+    fn test_rows_minor_count() {
+        // Tolerance suppresses one diff → it becomes "minor"
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 100.0, 'active'),
+                (2, 200.5, 'active'),
+                (3, 300.0, 'pending')
+            ) AS t(id, amount, status);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 100.3, 'active'),
+                (2, 200.5, 'active'),
+                (3, 300.0, 'shipped')
+            ) AS t(id, amount, status);"
+        )
+        .unwrap();
+
+        let cols: Vec<String> = vec!["amount".into(), "status".into()];
+        let col_types: HashMap<String, String> = [
+            ("amount".to_string(), "DOUBLE".to_string()),
+            ("status".to_string(), "VARCHAR".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let no_col_tol = HashMap::new();
+
+        // precision=0: 100.0 rounds to 100, 100.3 rounds to 100 → match (minor diff)
+        // id=3: status differs (pending vs shipped) → real diff
+        let result =
+            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol).unwrap();
+
+        assert_eq!(result.values_summary.rows_with_diffs, 1); // id=3
+        assert_eq!(result.values_summary.rows_minor, 1); // id=1 (amount diff suppressed)
+        assert_eq!(result.values_summary.rows_identical, 1); // id=2
+    }
+
+    #[test]
+    fn test_no_tolerance_minor_zero() {
+        // No tolerance → rows_minor should always be 0
+        let conn = setup_test_conn();
+        let compare_cols: Vec<String> = vec![
+            "customer_name".into(),
+            "amount".into(),
+            "status".into(),
+            "created_at".into(),
+        ];
+        let col_types = get_test_column_types();
+        let no_col_tol = HashMap::new();
+
+        let result = run_diff(
+            &conn,
+            &["id".to_string()],
+            &compare_cols,
+            &col_types,
+            None,
+            &no_col_tol,
+        )
+        .unwrap();
+
+        assert_eq!(result.values_summary.rows_minor, 0);
+        // Verify existing assertions still hold
+        assert_eq!(result.values_summary.rows_with_diffs, 4);
+        assert_eq!(result.values_summary.rows_identical, 5);
+    }
+
+    #[test]
+    fn test_raw_diff_columns_exist() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_tolerance_tables(&conn);
+        let cols: Vec<String> = vec!["name".into(), "amount".into(), "status".into()];
+        let col_types = tolerance_column_types();
+        let no_col_tol = HashMap::new();
+
+        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol).unwrap();
+
+        // Verify is_raw_diff_* columns exist in _diff_join
+        let mut stmt = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = '_diff_join' AND column_name LIKE 'is_raw_diff_%' \
+                 ORDER BY ordinal_position",
+            )
+            .unwrap();
+        let raw_cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(raw_cols.len(), 3);
+        assert!(raw_cols.contains(&"is_raw_diff_name".to_string()));
+        assert!(raw_cols.contains(&"is_raw_diff_amount".to_string()));
+        assert!(raw_cols.contains(&"is_raw_diff_status".to_string()));
+    }
+
+    #[test]
+    fn test_minor_row_classification() {
+        // A row where amount diff is suppressed by tolerance:
+        // is_diff_amount = 0 (tolerance), is_raw_diff_amount = 1 (raw)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 100.3)
+            ) AS t(id, amount);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 100.0)
+            ) AS t(id, amount);"
+        )
+        .unwrap();
+
+        let cols: Vec<String> = vec!["amount".into()];
+        let col_types: HashMap<String, String> =
+            [("amount".to_string(), "DOUBLE".to_string())].into_iter().collect();
+        let no_col_tol = HashMap::new();
+
+        // precision=0 suppresses 100.3 vs 100.0
+        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol).unwrap();
+
+        let is_diff: i32 = conn
+            .query_row("SELECT \"is_diff_amount\" FROM _diff_join", [], |row| row.get(0))
+            .unwrap();
+        let is_raw_diff: i32 = conn
+            .query_row("SELECT \"is_raw_diff_amount\" FROM _diff_join", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(is_diff, 0); // tolerance suppressed
+        assert_eq!(is_raw_diff, 1); // raw diff detected
+    }
+
+    #[test]
+    fn test_mixed_row() {
+        // Row with one real diff (status) and one minor diff (amount with tolerance):
+        // classified as "diffs" not "minor" (any real diff = diffs category)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                (1, 100.3, 'active')
+            ) AS t(id, amount, status);
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                (1, 100.0, 'inactive')
+            ) AS t(id, amount, status);"
+        )
+        .unwrap();
+
+        let cols: Vec<String> = vec!["amount".into(), "status".into()];
+        let col_types: HashMap<String, String> = [
+            ("amount".to_string(), "DOUBLE".to_string()),
+            ("status".to_string(), "VARCHAR".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let no_col_tol = HashMap::new();
+
+        let result =
+            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol).unwrap();
+
+        // Row has a real diff (status), so it's "diffs", not "minor"
+        assert_eq!(result.values_summary.rows_with_diffs, 1);
+        assert_eq!(result.values_summary.rows_minor, 0);
+        assert_eq!(result.values_summary.rows_identical, 0);
     }
 }

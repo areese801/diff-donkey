@@ -87,7 +87,7 @@
     {:else if activeTab === "primary-keys"}
       <PrimaryKeysTab pkSummary={$diffResult?.pk_summary ?? null} />
     {:else if activeTab === "values"}
-      <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} />
+      <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} valuesSummary={$diffResult?.values_summary} />
     {/if}
   {/if}
 </main>

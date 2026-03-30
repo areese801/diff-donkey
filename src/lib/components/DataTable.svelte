@@ -11,9 +11,9 @@
   let { data, loading, onPageChange, highlightDiffs = false }: Props = $props();
 
   let totalPages = $derived(data ? Math.ceil(data.total / data.page_size) : 0);
-  /** Columns to display (filter out is_diff_* columns) */
+  /** Columns to display (filter out is_diff_* and is_raw_diff_* columns) */
   let displayColumns = $derived(
-    data?.columns.filter(c => !c.startsWith("is_diff_")) ?? []
+    data?.columns.filter(c => !c.startsWith("is_diff_") && !c.startsWith("is_raw_diff_")) ?? []
   );
 </script>
 
@@ -35,9 +35,12 @@
         {#each data.rows as row}
           <tr>
             {#each displayColumns as col}
-              {@const isDiffCol = `is_diff_${col.replace(/_[ab]$/, '')}`}
+              {@const baseCol = col.replace(/_[ab]$/, '')}
+              {@const isDiffCol = `is_diff_${baseCol}`}
+              {@const isRawDiffCol = `is_raw_diff_${baseCol}`}
               {@const hasDiff = highlightDiffs && row[isDiffCol] === 1}
-              <td class:diff-cell={hasDiff}>
+              {@const hasMinorDiff = highlightDiffs && row[isDiffCol] !== 1 && row[isRawDiffCol] === 1}
+              <td class:diff-cell={hasDiff} class:minor-diff-cell={hasMinorDiff}>
                 {row[col] ?? "NULL"}
               </td>
             {/each}
@@ -117,6 +120,12 @@
     font-weight: 500;
   }
 
+  .minor-diff-cell {
+    background: #fff8e1;
+    color: #e67e22;
+    font-weight: 500;
+  }
+
   .pagination {
     display: flex;
     align-items: center;
@@ -155,6 +164,11 @@
     .diff-cell {
       background: #4a2020;
       color: #ff8888;
+    }
+
+    .minor-diff-cell {
+      background: #4a4020;
+      color: #ffcc66;
     }
 
     .pagination button {

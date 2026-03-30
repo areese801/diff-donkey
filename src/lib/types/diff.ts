@@ -71,6 +71,7 @@ export interface PkSummary {
 export interface ValuesSummary {
   total_compared: number;
   rows_with_diffs: number;
+  rows_minor: number;
   rows_identical: number;
 }
 

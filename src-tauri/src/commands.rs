@@ -275,11 +275,13 @@ pub fn get_duplicate_pks(
 
 /// Get diff rows — matched rows where values differ, with pagination.
 /// Optional column_filter limits to rows where a specific column differs.
+/// Optional row_filter: "all" | "diffs" | "minor" | "same" (default: "diffs").
 #[tauri::command]
 pub fn get_diff_rows(
     page: usize,
     page_size: usize,
     column_filter: Option<String>,
+    row_filter: Option<String>,
     state: State<DuckDbState>,
 ) -> Result<PagedRows, String> {
     let page_size = page_size.min(MAX_PAGE_SIZE);
@@ -287,6 +289,13 @@ pub fn get_diff_rows(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
+
+    // SECURITY: Validate row_filter against known values
+    if let Some(ref rf) = row_filter {
+        if !["all", "diffs", "minor", "same"].contains(&rf.as_str()) {
+            return Err(format!("Invalid row filter: '{}'", rf));
+        }
+    }
 
     // Get compare column names from _diff_join (is_diff_* columns)
     let mut stmt = conn
@@ -303,23 +312,28 @@ pub fn get_diff_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
+    // Get is_raw_diff_* columns
+    let mut raw_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'is_raw_diff_%' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let raw_diff_cols: Vec<String> = raw_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
     // SECURITY: Validate column_filter against the known column list.
-    // Without this, a crafted column_filter like "x = 1; DROP TABLE source_a; --"
-    // would be interpolated directly into the WHERE clause.
-    let diff_filter = if let Some(ref col) = column_filter {
+    if let Some(ref col) = column_filter {
         let expected_is_diff = format!("is_diff_{}", col);
         if !compare_cols.contains(&expected_is_diff) {
             return Err(format!("Invalid column filter: '{}'", col));
         }
-        // Safe: col is validated to be a known column name from the schema
-        format!("\"{}\" = 1", expected_is_diff)
-    } else {
-        compare_cols
-            .iter()
-            .map(|c| format!("\"{}\" = 1", c))
-            .collect::<Vec<_>>()
-            .join(" OR ")
-    };
+    }
 
     // Build composite PK NOT NULL check from _diff_join schema
     let mut pk_stmt = conn
@@ -347,7 +361,60 @@ pub fn get_diff_rows(
         .collect::<Vec<_>>()
         .join(" AND ");
 
-    let where_clause = format!("{} AND ({})", pk_not_null, diff_filter);
+    // Build WHERE clause based on row_filter
+    let where_clause = match row_filter.as_deref() {
+        Some("all") => {
+            // All matched rows
+            pk_not_null.clone()
+        }
+        Some("minor") => {
+            // All is_diff_* = 0 AND at least one is_raw_diff_* = 1
+            let no_diffs = compare_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let any_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 1", c))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+
+            if let Some(ref col) = column_filter {
+                // Minor diff on this specific column
+                let is_diff_col = format!("is_diff_{}", col);
+                let is_raw_diff_col = format!("is_raw_diff_{}", col);
+                format!(
+                    "{} AND \"{}\" = 0 AND \"{}\" = 1",
+                    pk_not_null, is_diff_col, is_raw_diff_col
+                )
+            } else {
+                format!("{} AND ({}) AND ({})", pk_not_null, no_diffs, any_raw)
+            }
+        }
+        Some("same") => {
+            // All is_raw_diff_* = 0 (truly identical)
+            let no_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("{} AND ({})", pk_not_null, no_raw)
+        }
+        _ => {
+            // Default: "diffs" — at least one is_diff_* = 1
+            let diff_filter = if let Some(ref col) = column_filter {
+                format!("\"is_diff_{}\" = 1", col)
+            } else {
+                compare_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 1", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ")
+            };
+            format!("{} AND ({})", pk_not_null, diff_filter)
+        }
+    };
 
     // Count total matching rows
     let total: i64 = conn
@@ -358,11 +425,13 @@ pub fn get_diff_rows(
         )
         .map_err(|e| e.to_string())?;
 
-    // Get all non-is_diff columns (pk + value columns)
+    // Get all non-metadata columns (pk + value columns, excluding is_diff_* and is_raw_diff_*)
     let mut col_stmt = conn
         .prepare(
             "SELECT column_name FROM information_schema.columns \
-             WHERE table_name = '_diff_join' AND column_name NOT LIKE 'is_diff_%' \
+             WHERE table_name = '_diff_join' \
+             AND column_name NOT LIKE 'is_diff_%' \
+             AND column_name NOT LIKE 'is_raw_diff_%' \
              ORDER BY ordinal_position",
         )
         .map_err(|e| e.to_string())?;
@@ -373,10 +442,11 @@ pub fn get_diff_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    // Also include is_diff columns so frontend knows which cells to highlight
+    // Include is_diff and is_raw_diff columns so frontend can highlight cells
     let all_columns: Vec<String> = {
         let mut all = columns.clone();
         all.extend(compare_cols.iter().cloned());
+        all.extend(raw_diff_cols.iter().cloned());
         all
     };
 

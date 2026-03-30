@@ -78,15 +78,26 @@
       <h3>Values Summary</h3>
       <div class="values-bar">
         {#if result.values_summary.total_compared > 0}
-          {@const identicalPct = (result.values_summary.rows_identical / result.values_summary.total_compared) * 100}
+          {@const total = result.values_summary.total_compared}
+          {@const identicalPct = (result.values_summary.rows_identical / total) * 100}
+          {@const minorPct = (result.values_summary.rows_minor / total) * 100}
+          {@const diffPct = (result.values_summary.rows_with_diffs / total) * 100}
           <div class="bar-identical" style="width: {identicalPct}%"></div>
-          <div class="bar-diff" style="width: {100 - identicalPct}%"></div>
+          {#if minorPct > 0}
+            <div class="bar-minor" style="width: {minorPct}%"></div>
+          {/if}
+          <div class="bar-diff" style="width: {diffPct}%"></div>
         {/if}
       </div>
       <div class="values-legend">
         <span class="legend-item identical">
           {result.values_summary.rows_identical.toLocaleString()} identical
         </span>
+        {#if result.values_summary.rows_minor > 0}
+          <span class="legend-item minor">
+            {result.values_summary.rows_minor.toLocaleString()} minor
+          </span>
+        {/if}
         <span class="legend-item diff">
           {result.values_summary.rows_with_diffs.toLocaleString()} with differences
         </span>
@@ -220,6 +231,10 @@
     background: #27ae60;
   }
 
+  .bar-minor {
+    background: #f39c12;
+  }
+
   .bar-diff {
     background: #e74c3c;
   }
@@ -242,6 +257,10 @@
 
   .legend-item.identical::before {
     background: #27ae60;
+  }
+
+  .legend-item.minor::before {
+    background: #f39c12;
   }
 
   .legend-item.diff::before {

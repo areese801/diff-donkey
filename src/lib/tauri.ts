@@ -55,13 +55,19 @@ export async function getDuplicatePks(
   return invoke<PagedRows>("get_duplicate_pks", { side, page, pageSize });
 }
 
-/** Get diff rows (rows where values differ), with optional column filter */
+/** Get diff rows with optional column filter and row filter */
 export async function getDiffRows(
   page: number,
   pageSize: number,
-  columnFilter?: string
+  columnFilter?: string,
+  rowFilter?: string
 ): Promise<PagedRows> {
-  return invoke<PagedRows>("get_diff_rows", { page, pageSize, columnFilter: columnFilter ?? null });
+  return invoke<PagedRows>("get_diff_rows", {
+    page,
+    pageSize,
+    columnFilter: columnFilter ?? null,
+    rowFilter: rowFilter ?? null,
+  });
 }
 
 // ─── Connection Management ──────────────────────────────────────────────────
