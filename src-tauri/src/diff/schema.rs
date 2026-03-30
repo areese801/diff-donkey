@@ -80,13 +80,15 @@ pub fn get_columns(conn: &Connection, table_name: &str) -> Result<Vec<ColumnInfo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::ActivityLog;
     use crate::loader;
     use duckdb::Connection;
 
     fn setup_test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        loader::load_csv(&conn, "../test-data/orders_a.csv", "source_a").unwrap();
-        loader::load_csv(&conn, "../test-data/orders_b.csv", "source_b").unwrap();
+        let log = ActivityLog::new();
+        loader::load_csv(&conn, "../test-data/orders_a.csv", "source_a", &log).unwrap();
+        loader::load_csv(&conn, "../test-data/orders_b.csv", "source_b", &log).unwrap();
         conn
     }
 

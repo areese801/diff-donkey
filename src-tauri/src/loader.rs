@@ -4,6 +4,7 @@
 /// combined — it auto-detects column types, delimiters, and headers.
 use duckdb::Connection;
 
+use crate::activity::{self, ActivityLog};
 use crate::error::DiffDonkeyError;
 use crate::types::{ColumnInfo, TableMeta};
 
@@ -22,7 +23,7 @@ fn escape_sql_string(s: &str) -> String {
 /// `read_csv_auto` handles type inference automatically — integers, floats,
 /// dates, strings are all detected. Similar to pandas `read_csv()` but
 /// running inside a SQL engine.
-pub fn load_csv(conn: &Connection, path: &str, table_name: &str) -> Result<TableMeta, DiffDonkeyError> {
+pub fn load_csv(conn: &Connection, path: &str, table_name: &str, log: &ActivityLog) -> Result<TableMeta, DiffDonkeyError> {
     // Validate the file exists before asking DuckDB to read it
     if !std::path::Path::new(path).exists() {
         return Err(DiffDonkeyError::Validation("File not found".to_string()));
@@ -37,14 +38,14 @@ pub fn load_csv(conn: &Connection, path: &str, table_name: &str) -> Result<Table
         "CREATE OR REPLACE TABLE \"{}\" AS SELECT * FROM read_csv_auto('{}')",
         table_name, escaped_path
     );
-    conn.execute_batch(&sql)?;
+    activity::execute_logged(conn, &sql, "load_csv", log)?;
 
     get_table_meta(conn, table_name)
 }
 
 /// Load a Parquet file into a DuckDB table.
 /// DuckDB reads Parquet natively — no extra dependencies needed.
-pub fn load_parquet(conn: &Connection, path: &str, table_name: &str) -> Result<TableMeta, DiffDonkeyError> {
+pub fn load_parquet(conn: &Connection, path: &str, table_name: &str, log: &ActivityLog) -> Result<TableMeta, DiffDonkeyError> {
     if !std::path::Path::new(path).exists() {
         return Err(DiffDonkeyError::Validation("File not found".to_string()));
     }
@@ -55,7 +56,7 @@ pub fn load_parquet(conn: &Connection, path: &str, table_name: &str) -> Result<T
         "CREATE OR REPLACE TABLE \"{}\" AS SELECT * FROM read_parquet('{}')",
         table_name, escaped_path
     );
-    conn.execute_batch(&sql)?;
+    activity::execute_logged(conn, &sql, "load_parquet", log)?;
 
     get_table_meta(conn, table_name)
 }
@@ -97,10 +98,14 @@ mod tests {
     use super::*;
     use duckdb::Connection;
 
+    fn test_log() -> ActivityLog {
+        ActivityLog::new()
+    }
+
     #[test]
     fn test_load_csv() {
         let conn = Connection::open_in_memory().unwrap();
-        let meta = load_csv(&conn, "../test-data/orders_a.csv", "source_a").unwrap();
+        let meta = load_csv(&conn, "../test-data/orders_a.csv", "source_a", &test_log()).unwrap();
 
         assert_eq!(meta.table_name, "source_a");
         assert_eq!(meta.row_count, 10);
@@ -112,7 +117,7 @@ mod tests {
     #[test]
     fn test_load_csv_file_not_found() {
         let conn = Connection::open_in_memory().unwrap();
-        let result = load_csv(&conn, "nonexistent.csv", "source_a");
+        let result = load_csv(&conn, "nonexistent.csv", "source_a", &test_log());
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -122,9 +127,10 @@ mod tests {
     #[test]
     fn test_load_csv_both_sources() {
         let conn = Connection::open_in_memory().unwrap();
+        let log = test_log();
 
-        let meta_a = load_csv(&conn, "../test-data/orders_a.csv", "source_a").unwrap();
-        let meta_b = load_csv(&conn, "../test-data/orders_b.csv", "source_b").unwrap();
+        let meta_a = load_csv(&conn, "../test-data/orders_a.csv", "source_a", &log).unwrap();
+        let meta_b = load_csv(&conn, "../test-data/orders_b.csv", "source_b", &log).unwrap();
 
         assert_eq!(meta_a.row_count, 10);
         assert_eq!(meta_b.row_count, 10);
