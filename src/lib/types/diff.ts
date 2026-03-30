@@ -52,6 +52,7 @@ export interface DiffStats {
 export interface ColumnDiffStats {
   name: string;
   diff_count: number;
+  minor_count: number;
   match_count: number;
   total: number;
   match_pct: number;
@@ -71,6 +72,7 @@ export interface PkSummary {
 export interface ValuesSummary {
   total_compared: number;
   rows_with_diffs: number;
+  rows_minor: number;
   rows_identical: number;
 }
 
@@ -84,10 +86,13 @@ export type ColumnTolerance =
 
 /** Diff configuration sent to the backend */
 export interface DiffConfig {
-  pk_column: string;
+  pk_columns: string[];
   tolerance: number | null;
   column_tolerances: Record<string, ColumnTolerance> | null;
 }
+
+/** Supported database types for remote loading */
+export type DatabaseType = "postgres" | "mysql";
 
 /** Paginated row data returned from backend */
 export interface PagedRows {

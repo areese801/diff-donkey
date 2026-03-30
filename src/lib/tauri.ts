@@ -6,7 +6,8 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType } from "./types/diff";
+import type { SavedConnection } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
 export async function loadSource(
@@ -14,6 +15,16 @@ export async function loadSource(
   label: "a" | "b"
 ): Promise<TableMeta> {
   return invoke<TableMeta>("load_source", { path, label });
+}
+
+/** Load data from a remote database into DuckDB as source_a or source_b */
+export async function loadDatabaseSource(
+  connString: string,
+  query: string,
+  label: "a" | "b",
+  dbType: DatabaseType
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_database_source", { connString, query, label, dbType });
 }
 
 /** Compare schemas of the two loaded sources */
@@ -44,11 +55,54 @@ export async function getDuplicatePks(
   return invoke<PagedRows>("get_duplicate_pks", { side, page, pageSize });
 }
 
-/** Get diff rows (rows where values differ), with optional column filter */
+/** Get diff rows with optional column filter and row filter */
 export async function getDiffRows(
   page: number,
   pageSize: number,
-  columnFilter?: string
+  columnFilter?: string,
+  rowFilter?: string
 ): Promise<PagedRows> {
-  return invoke<PagedRows>("get_diff_rows", { page, pageSize, columnFilter: columnFilter ?? null });
+  return invoke<PagedRows>("get_diff_rows", {
+    page,
+    pageSize,
+    columnFilter: columnFilter ?? null,
+    rowFilter: rowFilter ?? null,
+  });
+}
+
+// ─── Connection Management ──────────────────────────────────────────────────
+
+/** List all saved database connections */
+export async function listSavedConnections(): Promise<SavedConnection[]> {
+  return invoke<SavedConnection[]>("list_saved_connections");
+}
+
+/** Save (create or update) a database connection */
+export async function saveConnection(
+  conn: SavedConnection,
+  password: string | null
+): Promise<void> {
+  return invoke<void>("save_connection", { conn, password });
+}
+
+/** Delete a saved connection by ID */
+export async function deleteConnection(id: string): Promise<void> {
+  return invoke<void>("delete_connection", { id });
+}
+
+/** Test a database connection */
+export async function testConnection(
+  conn: SavedConnection,
+  password: string | null
+): Promise<string> {
+  return invoke<string>("test_connection", { conn, password });
+}
+
+/** Load data from a saved connection into DuckDB */
+export async function loadFromSavedConnection(
+  id: string,
+  query: string,
+  label: "a" | "b"
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_from_saved_connection", { id, query, label });
 }

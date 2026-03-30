@@ -9,3 +9,6 @@ export const isLoading = writable(false);
 
 /** The primary key column used for the current diff */
 export const pkColumn = writable<string | null>(null);
+
+/** The precision (decimal places) used for the current diff */
+export const diffPrecision = writable<number | null>(null);

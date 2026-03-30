@@ -78,15 +78,26 @@
       <h3>Values Summary</h3>
       <div class="values-bar">
         {#if result.values_summary.total_compared > 0}
-          {@const identicalPct = (result.values_summary.rows_identical / result.values_summary.total_compared) * 100}
+          {@const total = result.values_summary.total_compared}
+          {@const identicalPct = (result.values_summary.rows_identical / total) * 100}
+          {@const minorPct = (result.values_summary.rows_minor / total) * 100}
+          {@const diffPct = (result.values_summary.rows_with_diffs / total) * 100}
           <div class="bar-identical" style="width: {identicalPct}%"></div>
-          <div class="bar-diff" style="width: {100 - identicalPct}%"></div>
+          {#if minorPct > 0}
+            <div class="bar-minor" style="width: {minorPct}%"></div>
+          {/if}
+          <div class="bar-diff" style="width: {diffPct}%"></div>
         {/if}
       </div>
       <div class="values-legend">
         <span class="legend-item identical">
           {result.values_summary.rows_identical.toLocaleString()} identical
         </span>
+        {#if result.values_summary.rows_minor > 0}
+          <span class="legend-item minor">
+            {result.values_summary.rows_minor.toLocaleString()} minor
+          </span>
+        {/if}
         <span class="legend-item diff">
           {result.values_summary.rows_with_diffs.toLocaleString()} with differences
         </span>
@@ -102,6 +113,7 @@
             <th>Column</th>
             <th>Match %</th>
             <th>Diffs</th>
+            <th>Minor</th>
             <th>Matches</th>
             <th></th>
           </tr>
@@ -114,6 +126,7 @@
                 {col.match_pct.toFixed(1)}%
               </td>
               <td class:has-diffs={col.diff_count > 0}>{col.diff_count.toLocaleString()}</td>
+              <td class:has-minor={col.minor_count > 0}>{col.minor_count.toLocaleString()}</td>
               <td>{col.match_count.toLocaleString()}</td>
               <td>
                 <div class="mini-bar">
@@ -220,6 +233,10 @@
     background: #27ae60;
   }
 
+  .bar-minor {
+    background: #f39c12;
+  }
+
   .bar-diff {
     background: #e74c3c;
   }
@@ -242,6 +259,10 @@
 
   .legend-item.identical::before {
     background: #27ae60;
+  }
+
+  .legend-item.minor::before {
+    background: #f39c12;
   }
 
   .legend-item.diff::before {
@@ -277,6 +298,11 @@
 
   .has-diffs {
     color: #e74c3c;
+    font-weight: 500;
+  }
+
+  .has-minor {
+    color: #e67e22;
     font-weight: 500;
   }
 

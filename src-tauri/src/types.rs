@@ -61,6 +61,7 @@ pub struct DiffStats {
 pub struct ColumnDiffStats {
     pub name: String,
     pub diff_count: i64,
+    pub minor_count: i64,
     pub match_count: i64,
     pub total: i64,
     pub match_pct: f64,
@@ -82,6 +83,7 @@ pub struct PkSummary {
 pub struct ValuesSummary {
     pub total_compared: i64,
     pub rows_with_diffs: i64,
+    pub rows_minor: i64,
     pub rows_identical: i64,
 }
 
@@ -118,7 +120,7 @@ pub enum ColumnTolerance {
 /// Resolution: column_tolerances[col] → auto-apply Precision(tolerance) if numeric → IS DISTINCT FROM.
 #[derive(Debug, serde::Deserialize)]
 pub struct DiffConfig {
-    pub pk_column: String,
+    pub pk_columns: Vec<String>,
     pub tolerance: Option<i32>,
     pub column_tolerances: Option<std::collections::HashMap<String, ColumnTolerance>>,
 }

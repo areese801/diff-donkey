@@ -4,14 +4,30 @@
 
   interface Props {
     columns: ColumnInfo[];
-    onRunDiff: (pkColumn: string, tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null) => void;
+    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null) => void;
     isLoading: boolean;
   }
 
   let { columns, onRunDiff, isLoading }: Props = $props();
 
-  let selectedPk = $state("");
+  let selectedPks: string[] = $state([]);
   let precisionInput = $state("");
+
+  // Auto-select PK columns: first column named "id" or ending in "_id"
+  $effect(() => {
+    if (columns.length > 0 && selectedPks.length === 0) {
+      const autoDetected = columns
+        .filter(c => {
+          const lower = c.name.toLowerCase();
+          return lower === "id" || lower.endsWith("_id");
+        })
+        .map(c => c.name);
+      if (autoDetected.length > 0) {
+        selectedPks = autoDetected;
+      }
+    }
+  });
+  let ignoreCase = $state(false);
   let showPerColumn = $state(false);
   let perColumnMode: Record<string, string> = $state({});
   let perColumnValue: Record<string, string> = $state({});
@@ -32,7 +48,7 @@
   }
 
   let nonPkColumns = $derived(
-    columns.filter(c => c.name !== selectedPk)
+    columns.filter(c => !selectedPks.includes(c.name))
   );
 
   function modesForType(dataType: string): { value: string; label: string }[] {
@@ -60,7 +76,7 @@
   function handleRun() {
     const raw = String(precisionInput).trim();
     const prec = raw === "" ? null : parseInt(raw, 10);
-    if (prec !== null && (isNaN(prec) || prec < 0)) return;
+    if (prec !== null && isNaN(prec)) return;
 
     const colTols: Record<string, ColumnTolerance> = {};
     for (const col of nonPkColumns) {
@@ -88,8 +104,18 @@
       }
     }
 
+    // Apply global case-insensitive toggle to string columns not already overridden
+    if (ignoreCase) {
+      for (const col of nonPkColumns) {
+        if (col.name in colTols) continue; // per-column override takes precedence
+        if (!isNumericType(col.data_type) && !isTimestampType(col.data_type)) {
+          colTols[col.name] = { mode: "case_insensitive" };
+        }
+      }
+    }
+
     const hasTols = Object.keys(colTols).length > 0;
-    onRunDiff(selectedPk, prec, hasTols ? colTols : null);
+    onRunDiff(selectedPks, prec, hasTols ? colTols : null);
   }
 
   function needsValueInput(mode: string): boolean {
@@ -99,19 +125,17 @@
 
 <div class="diff-config">
   <div class="config-row">
-    <label for="pk-select">Primary Key Column:</label>
-    <select id="pk-select" bind:value={selectedPk} disabled={isLoading}>
-      <option value="" disabled>Select a column...</option>
+    <label for="pk-select">Primary Key:</label>
+    <select id="pk-select" multiple bind:value={selectedPks} disabled={isLoading} class="pk-multi-select">
       {#each columns as col}
         <option value={col.name}>{col.name} ({col.data_type})</option>
       {/each}
     </select>
 
-    <label for="precision-input">Decimal Places:</label>
+    <label for="precision-input" title="Positive = decimal places (2 → hundredths). Negative = integer rounding (-1 → nearest 10, -2 → nearest 100).">Precision:</label>
     <input
       id="precision-input"
       type="number"
-      min="0"
       step="1"
       placeholder="e.g. 2"
       bind:value={precisionInput}
@@ -119,9 +143,14 @@
       class="tolerance-input"
     />
 
+    <label class="ignore-case-toggle">
+      <input type="checkbox" bind:checked={ignoreCase} disabled={isLoading} />
+      Ignore Case
+    </label>
+
     <button
       onclick={handleRun}
-      disabled={!selectedPk || isLoading}
+      disabled={selectedPks.length === 0 || isLoading}
     >
       {isLoading ? "Running..." : "Run Diff"}
     </button>
@@ -181,6 +210,25 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .pk-multi-select {
+    min-height: 60px;
+    max-height: 100px;
+    min-width: 180px;
+  }
+
+  .ignore-case-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85em;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .ignore-case-toggle input {
+    cursor: pointer;
   }
 
   label {

@@ -12,11 +12,15 @@
 /// strings. Every IPC parameter must be validated before use in SQL.
 use tauri::State;
 
+use crate::connections::{self, SavedConnection};
 use crate::db::DuckDbState;
+use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
-use crate::types::{ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta};
+use crate::types::{
+    ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
+};
 
 /// Maximum rows per page to prevent memory exhaustion via large page_size.
 const MAX_PAGE_SIZE: usize = 1000;
@@ -89,6 +93,49 @@ pub fn load_source(
     result.map_err(|e: DiffDonkeyError| e.into())
 }
 
+/// Load data from a remote database into DuckDB as either source_a or source_b.
+///
+/// Uses DuckDB's postgres or mysql extension to query the remote database
+/// and materialize the result as a local table.
+#[tauri::command]
+pub fn load_database_source(
+    conn_string: String,
+    query: String,
+    label: String,
+    db_type: db_loader::DatabaseType,
+    state: State<DuckDbState>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label is exactly "a" or "b"
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
+        |e: DiffDonkeyError| {
+            // SECURITY: Sanitize connection errors to avoid leaking credentials.
+            // The full error is logged to stderr for debugging.
+            let msg = e.to_string();
+            eprintln!("Database load error: {}", msg);
+            if msg.contains("connection")
+                || msg.contains("authentication")
+                || msg.contains("password")
+            {
+                "Database connection failed. Check your connection string and credentials."
+                    .to_string()
+            } else {
+                e.into()
+            }
+        },
+    )
+}
+
 /// Compare schemas of the two loaded sources.
 /// Both source_a and source_b must be loaded first.
 #[tauri::command]
@@ -112,29 +159,26 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    let pk_column = &config.pk_column;
+    let pk_columns = &config.pk_columns;
 
-    // SECURITY: Validate pk_column exists in both source tables.
-    validate_column_exists(&conn, "source_a", pk_column)?;
-    validate_column_exists(&conn, "source_b", pk_column)?;
-
-    // Validate global precision
-    if let Some(prec) = config.tolerance {
-        if prec < 0 {
-            return Err("Decimal places must be a non-negative integer".to_string());
-        }
+    // SECURITY: Validate each PK column exists in both source tables.
+    for pk in pk_columns {
+        validate_column_exists(&conn, "source_a", pk)?;
+        validate_column_exists(&conn, "source_b", pk)?;
     }
+
+    if pk_columns.is_empty() {
+        return Err("At least one primary key column is required".to_string());
+    }
+
+    // Validate global precision (negative values are valid — ROUND(x, -1) rounds to nearest 10)
+    // No range restriction needed; DuckDB handles all integer precision values.
 
     // Validate per-column tolerances
     let column_tolerances = config.column_tolerances.unwrap_or_default();
     for (col, tol) in &column_tolerances {
         match tol {
-            ColumnTolerance::Precision { precision } if *precision < 0 => {
-                return Err(format!(
-                    "Precision for column '{}' must be non-negative",
-                    col
-                ));
-            }
+            // Precision can be negative (ROUND(x, -1) rounds to nearest 10)
             ColumnTolerance::Seconds { seconds }
                 if *seconds < 0.0 || seconds.is_nan() || seconds.is_infinite() =>
             {
@@ -147,12 +191,12 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         }
     }
 
-    // Get shared columns (excluding PK) to compare
+    // Get shared columns (excluding PKs) to compare
     let schema = diff::schema::compare_schemas(&conn).map_err(|e| e.to_string())?;
     let compare_columns: Vec<String> = schema
         .shared
         .iter()
-        .filter(|c| c.name != *pk_column)
+        .filter(|c| !pk_columns.contains(&c.name))
         .map(|c| c.name.clone())
         .collect();
 
@@ -160,20 +204,21 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
     let column_types: std::collections::HashMap<String, String> = schema
         .shared
         .iter()
-        .filter(|c| c.name != *pk_column)
+        .filter(|c| !pk_columns.contains(&c.name))
         .map(|c| (c.name.clone(), c.type_a.clone()))
         .collect();
 
-    // SECURITY: Store PK column name using a parameterized query.
+    // Store PK columns as JSON array in _diff_meta
+    let pk_json = serde_json::to_string(pk_columns).map_err(|e| e.to_string())?;
     conn.execute(
-        "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_column",
-        [pk_column],
+        "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_columns",
+        [&pk_json],
     )
     .map_err(|e| e.to_string())?;
 
     diff::stats::run_diff(
         &conn,
-        pk_column,
+        pk_columns,
         &compare_columns,
         &column_types,
         config.tolerance,
@@ -182,10 +227,12 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
     .map_err(|e: DiffDonkeyError| e.into())
 }
 
-/// Helper: get the PK column name from the stored diff metadata.
-fn get_pk_column(conn: &duckdb::Connection) -> Result<String, String> {
-    conn.query_row("SELECT pk_column FROM _diff_meta", [], |row| row.get(0))
-        .map_err(|_| "Diff not run yet — run diff first".to_string())
+/// Helper: get PK column names from the stored diff metadata.
+fn get_pk_columns(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
+    let json_str: String = conn
+        .query_row("SELECT pk_columns FROM _diff_meta", [], |row| row.get(0))
+        .map_err(|_| "Diff not run yet — run diff first".to_string())?;
+    serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse PK columns: {}", e))
 }
 
 /// Get exclusive rows — rows that exist only in one side.
@@ -201,9 +248,9 @@ pub fn get_exclusive_rows(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pk = get_pk_column(&conn)?;
+    let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_exclusive_rows(&conn, &side, &pk, page, page_size)
+    diff::keys::get_exclusive_rows(&conn, &side, &pks, page, page_size)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -220,19 +267,21 @@ pub fn get_duplicate_pks(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pk = get_pk_column(&conn)?;
+    let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_duplicate_pks(&conn, &side, &pk, page, page_size)
+    diff::keys::get_duplicate_pks(&conn, &side, &pks, page, page_size)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
 /// Get diff rows — matched rows where values differ, with pagination.
 /// Optional column_filter limits to rows where a specific column differs.
+/// Optional row_filter: "all" | "diffs" | "minor" | "same" (default: "diffs").
 #[tauri::command]
 pub fn get_diff_rows(
     page: usize,
     page_size: usize,
     column_filter: Option<String>,
+    row_filter: Option<String>,
     state: State<DuckDbState>,
 ) -> Result<PagedRows, String> {
     let page_size = page_size.min(MAX_PAGE_SIZE);
@@ -240,6 +289,13 @@ pub fn get_diff_rows(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
+
+    // SECURITY: Validate row_filter against known values
+    if let Some(ref rf) = row_filter {
+        if !["all", "diffs", "minor", "same"].contains(&rf.as_str()) {
+            return Err(format!("Invalid row filter: '{}'", rf));
+        }
+    }
 
     // Get compare column names from _diff_join (is_diff_* columns)
     let mut stmt = conn
@@ -256,28 +312,109 @@ pub fn get_diff_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
+    // Get is_raw_diff_* columns
+    let mut raw_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'is_raw_diff_%' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let raw_diff_cols: Vec<String> = raw_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
     // SECURITY: Validate column_filter against the known column list.
-    // Without this, a crafted column_filter like "x = 1; DROP TABLE source_a; --"
-    // would be interpolated directly into the WHERE clause.
-    let diff_filter = if let Some(ref col) = column_filter {
+    if let Some(ref col) = column_filter {
         let expected_is_diff = format!("is_diff_{}", col);
         if !compare_cols.contains(&expected_is_diff) {
             return Err(format!("Invalid column filter: '{}'", col));
         }
-        // Safe: col is validated to be a known column name from the schema
-        format!("\"{}\" = 1", expected_is_diff)
-    } else {
-        compare_cols
-            .iter()
-            .map(|c| format!("\"{}\" = 1", c))
-            .collect::<Vec<_>>()
-            .join(" OR ")
-    };
+    }
 
-    let where_clause = format!(
-        "pk_a IS NOT NULL AND pk_b IS NOT NULL AND ({})",
-        diff_filter
-    );
+    // Build composite PK NOT NULL check from _diff_join schema
+    let mut pk_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'pk_%_a' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let pk_a_cols: Vec<String> = pk_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let pk_not_null = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\" IS NOT NULL", c))
+        .chain(
+            pk_a_cols
+                .iter()
+                .map(|c| format!("\"{}\" IS NOT NULL", c.replace("_a", "_b"))),
+        )
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    // Build WHERE clause based on row_filter
+    let where_clause = match row_filter.as_deref() {
+        Some("all") => {
+            // All matched rows
+            pk_not_null.clone()
+        }
+        Some("minor") => {
+            // All is_diff_* = 0 AND at least one is_raw_diff_* = 1
+            let no_diffs = compare_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let any_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 1", c))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+
+            if let Some(ref col) = column_filter {
+                // Minor diff on this specific column
+                let is_diff_col = format!("is_diff_{}", col);
+                let is_raw_diff_col = format!("is_raw_diff_{}", col);
+                format!(
+                    "{} AND \"{}\" = 0 AND \"{}\" = 1",
+                    pk_not_null, is_diff_col, is_raw_diff_col
+                )
+            } else {
+                format!("{} AND ({}) AND ({})", pk_not_null, no_diffs, any_raw)
+            }
+        }
+        Some("same") => {
+            // All is_raw_diff_* = 0 (truly identical)
+            let no_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("{} AND ({})", pk_not_null, no_raw)
+        }
+        _ => {
+            // Default: "diffs" — at least one is_diff_* = 1
+            let diff_filter = if let Some(ref col) = column_filter {
+                format!("\"is_diff_{}\" = 1", col)
+            } else {
+                compare_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 1", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ")
+            };
+            format!("{} AND ({})", pk_not_null, diff_filter)
+        }
+    };
 
     // Count total matching rows
     let total: i64 = conn
@@ -288,11 +425,13 @@ pub fn get_diff_rows(
         )
         .map_err(|e| e.to_string())?;
 
-    // Get all non-is_diff columns (pk + value columns)
+    // Get all non-metadata columns (pk + value columns, excluding is_diff_* and is_raw_diff_*)
     let mut col_stmt = conn
         .prepare(
             "SELECT column_name FROM information_schema.columns \
-             WHERE table_name = '_diff_join' AND column_name NOT LIKE 'is_diff_%' \
+             WHERE table_name = '_diff_join' \
+             AND column_name NOT LIKE 'is_diff_%' \
+             AND column_name NOT LIKE 'is_raw_diff_%' \
              ORDER BY ordinal_position",
         )
         .map_err(|e| e.to_string())?;
@@ -303,10 +442,11 @@ pub fn get_diff_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    // Also include is_diff columns so frontend knows which cells to highlight
+    // Include is_diff and is_raw_diff columns so frontend can highlight cells
     let all_columns: Vec<String> = {
         let mut all = columns.clone();
         all.extend(compare_cols.iter().cloned());
+        all.extend(raw_diff_cols.iter().cloned());
         all
     };
 
@@ -320,13 +460,19 @@ pub fn get_diff_rows(
         .join(", ");
     let offset = page * page_size;
 
+    let order_by = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let sql = format!(
-        "SELECT {} FROM _diff_join WHERE {} ORDER BY pk_a, pk_b LIMIT {} OFFSET {}",
-        select_cols, where_clause, page_size, offset
+        "SELECT {} FROM _diff_join WHERE {} ORDER BY {} LIMIT {} OFFSET {}",
+        select_cols, where_clause, order_by, page_size, offset
     );
 
-    let rows = diff::keys::query_to_rows_public(&conn, &sql, &all_columns)
-        .map_err(|e| e.to_string())?;
+    let rows =
+        diff::keys::query_to_rows_public(&conn, &sql, &all_columns).map_err(|e| e.to_string())?;
 
     Ok(PagedRows {
         columns: all_columns,
@@ -335,4 +481,134 @@ pub fn get_diff_rows(
         page,
         page_size,
     })
+}
+
+// ─── Connection Management Commands ─────────────────────────────────────────
+
+/// List all saved database connections.
+#[tauri::command]
+pub fn list_saved_connections(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<SavedConnection>, String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::list_connections(&path).map_err(|e| e.to_string())
+}
+
+/// Save (create or update) a database connection.
+/// Password is stored separately in the OS keychain.
+#[tauri::command]
+pub fn save_connection(
+    app_handle: tauri::AppHandle,
+    conn: SavedConnection,
+    password: Option<String>,
+) -> Result<(), String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::save_connection(&path, conn, password).map_err(|e| {
+        eprintln!("Save connection error: {}", e);
+        e.to_string()
+    })
+}
+
+/// Delete a saved connection by ID.
+#[tauri::command]
+pub fn delete_connection(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
+    let path = connections::get_connections_path(&app_handle);
+    connections::delete_connection(&path, &id).map_err(|e| e.to_string())
+}
+
+/// Test a database connection by attempting a simple query.
+#[tauri::command]
+pub fn test_connection(
+    conn: SavedConnection,
+    password: Option<String>,
+    state: State<DuckDbState>,
+) -> Result<String, String> {
+    let duck_conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    connections::test_connection(&duck_conn, &conn, password.as_deref()).map_err(|e| {
+        let msg = e.to_string();
+        eprintln!("Test connection error: {}", msg);
+        if msg.contains("connection") || msg.contains("authentication") || msg.contains("password")
+        {
+            "Connection failed. Check your host, credentials, and network.".to_string()
+        } else {
+            msg
+        }
+    })
+}
+
+/// Load data from a saved connection into DuckDB as source_a or source_b.
+///
+/// Retrieves the password from the OS keychain, builds the connection string,
+/// and delegates to the existing db_loader infrastructure.
+#[tauri::command]
+pub fn load_from_saved_connection(
+    id: String,
+    query: String,
+    label: String,
+    app_handle: tauri::AppHandle,
+    state: State<DuckDbState>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+
+    // Look up the saved connection
+    let path = connections::get_connections_path(&app_handle);
+    let all_connections = connections::list_connections(&path).map_err(|e| e.to_string())?;
+    let saved = all_connections
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("Connection '{}' not found", id))?;
+
+    // Retrieve password from keychain
+    let password = connections::get_password(&id).map_err(|e| {
+        eprintln!("Keyring error: {}", e);
+        "Failed to retrieve stored password. You may need to re-enter it.".to_string()
+    })?;
+
+    // Build connection string
+    let conn_string = connections::build_connection_string(saved, password.as_deref());
+    if conn_string.trim().is_empty() {
+        return Err("Could not build connection string — check connection settings.".to_string());
+    }
+
+    // Determine database type for DuckDB extension
+    let db_type = match saved.db_type.as_str() {
+        "postgres" => db_loader::DatabaseType::Postgres,
+        "mysql" => db_loader::DatabaseType::MySQL,
+        _ => {
+            return Err(format!(
+                "Database type '{}' not yet supported for loading",
+                saved.db_type
+            ))
+        }
+    };
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
+        |e: DiffDonkeyError| {
+            let msg = e.to_string();
+            eprintln!("Database load error: {}", msg);
+            if msg.contains("connection")
+                || msg.contains("authentication")
+                || msg.contains("password")
+            {
+                "Database connection failed. Check your connection settings and credentials."
+                    .to_string()
+            } else {
+                e.into()
+            }
+        },
+    )
 }

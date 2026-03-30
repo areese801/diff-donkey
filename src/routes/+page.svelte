@@ -7,7 +7,7 @@
   import PrimaryKeysTab from "$lib/components/PrimaryKeysTab.svelte";
   import ValuesTab from "$lib/components/ValuesTab.svelte";
   import { sourceA, sourceB } from "$lib/stores/config";
-  import { diffResult, isLoading, pkColumn } from "$lib/stores/diff";
+  import { diffResult, isLoading, pkColumn, diffPrecision } from "$lib/stores/diff";
   import { getSchemaComparison, runDiff } from "$lib/tauri";
   import type { SchemaComparison } from "$lib/types/diff";
 
@@ -36,22 +36,23 @@
   }
 
   async function handleRunDiff(
-    selectedPk: string,
+    selectedPks: string[],
     tolerance: number | null,
     columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
   ) {
     isLoading.set(true);
     diffError = null;
-    pkColumn.set(selectedPk);
+    pkColumn.set(selectedPks.join(", "));
 
     try {
       const isFirstRun = !$diffResult;
       const result = await runDiff({
-        pk_column: selectedPk,
+        pk_columns: selectedPks,
         tolerance,
         column_tolerances: columnTolerances,
       });
       diffResult.set(result);
+      diffPrecision.set(tolerance);
       if (isFirstRun) activeTab = "overview";
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
@@ -87,7 +88,7 @@
     {:else if activeTab === "primary-keys"}
       <PrimaryKeysTab pkSummary={$diffResult?.pk_summary ?? null} />
     {:else if activeTab === "values"}
-      <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} />
+      <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} valuesSummary={$diffResult?.values_summary} precision={$diffPrecision} />
     {/if}
   {/if}
 </main>
