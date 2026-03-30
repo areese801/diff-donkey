@@ -171,23 +171,14 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         return Err("At least one primary key column is required".to_string());
     }
 
-    // Validate global precision
-    if let Some(prec) = config.tolerance {
-        if prec < 0 {
-            return Err("Decimal places must be a non-negative integer".to_string());
-        }
-    }
+    // Validate global precision (negative values are valid — ROUND(x, -1) rounds to nearest 10)
+    // No range restriction needed; DuckDB handles all integer precision values.
 
     // Validate per-column tolerances
     let column_tolerances = config.column_tolerances.unwrap_or_default();
     for (col, tol) in &column_tolerances {
         match tol {
-            ColumnTolerance::Precision { precision } if *precision < 0 => {
-                return Err(format!(
-                    "Precision for column '{}' must be non-negative",
-                    col
-                ));
-            }
+            // Precision can be negative (ROUND(x, -1) rounds to nearest 10)
             ColumnTolerance::Seconds { seconds }
                 if *seconds < 0.0 || seconds.is_nan() || seconds.is_infinite() =>
             {

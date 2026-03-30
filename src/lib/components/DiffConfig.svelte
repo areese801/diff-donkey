@@ -60,7 +60,7 @@
   function handleRun() {
     const raw = String(precisionInput).trim();
     const prec = raw === "" ? null : parseInt(raw, 10);
-    if (prec !== null && (isNaN(prec) || prec < 0)) return;
+    if (prec !== null && isNaN(prec)) return;
 
     const colTols: Record<string, ColumnTolerance> = {};
     for (const col of nonPkColumns) {
@@ -110,7 +110,6 @@
     <input
       id="precision-input"
       type="number"
-      min="0"
       step="1"
       placeholder="e.g. 2"
       bind:value={precisionInput}

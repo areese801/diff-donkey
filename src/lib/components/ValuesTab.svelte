@@ -15,8 +15,10 @@
   let loading = $state(false);
   const PAGE_SIZE = 50;
 
-  /** Fetch diff rows when column selection changes */
+  /** Fetch diff rows when column selection or diff results change */
   $effect(() => {
+    // Read columnStats to establish dependency — re-fetch when diff is re-run
+    void columnStats;
     // Trigger on selectedColumn changes (including null = all columns)
     fetchDiffRows(0);
   });
