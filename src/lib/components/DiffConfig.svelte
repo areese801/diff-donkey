@@ -47,6 +47,11 @@
     return dataType.toUpperCase().startsWith("TIMESTAMP");
   }
 
+  function isStringType(dataType: string): boolean {
+    const upper = dataType.toUpperCase();
+    return upper === "VARCHAR" || upper === "TEXT" || upper.startsWith("VARCHAR(") || upper === "STRING";
+  }
+
   let nonPkColumns = $derived(
     columns.filter(c => !selectedPks.includes(c.name))
   );
@@ -108,7 +113,7 @@
     if (ignoreCase) {
       for (const col of nonPkColumns) {
         if (col.name in colTols) continue; // per-column override takes precedence
-        if (!isNumericType(col.data_type) && !isTimestampType(col.data_type)) {
+        if (isStringType(col.data_type)) {
           colTols[col.name] = { mode: "case_insensitive" };
         }
       }
