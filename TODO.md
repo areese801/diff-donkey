@@ -55,6 +55,13 @@
 - [ ] **Export diff results** — save to CSV, Parquet, or DuckDB table
       Useful for sharing results or downstream consumption.
 
+## Cross-Platform Testing
+
+- [ ] **Windows** — test saved connections with Windows Credential Manager (`keyring` crate).
+      Verify credential store/retrieve, connection form, SSH tunnel. Build with `cargo tauri build`.
+- [ ] **Linux** — test saved connections with Secret Service (D-Bus) via `keyring` crate.
+      May need `libdbus` dev package installed. Verify on Ubuntu/Fedora.
+
 ## Future / Research
 
 - [ ] **Snowflake-native diff engine** — for very large datasets (100M+ rows),

@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod db_loader;
 mod diff;
 mod error;
 mod loader;
@@ -14,6 +15,7 @@ pub fn run() {
         .manage(db_state)
         .invoke_handler(tauri::generate_handler![
             commands::load_source,
+            commands::load_database_source,
             commands::get_schema_comparison,
             commands::run_diff,
             commands::get_exclusive_rows,

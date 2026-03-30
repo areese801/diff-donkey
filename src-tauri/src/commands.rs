@@ -13,6 +13,7 @@
 use tauri::State;
 
 use crate::db::DuckDbState;
+use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
@@ -87,6 +88,44 @@ pub fn load_source(
     };
 
     result.map_err(|e: DiffDonkeyError| e.into())
+}
+
+/// Load data from a remote database into DuckDB as either source_a or source_b.
+///
+/// Uses DuckDB's postgres or mysql extension to query the remote database
+/// and materialize the result as a local table.
+#[tauri::command]
+pub fn load_database_source(
+    conn_string: String,
+    query: String,
+    label: String,
+    db_type: db_loader::DatabaseType,
+    state: State<DuckDbState>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label is exactly "a" or "b"
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type)
+        .map_err(|e: DiffDonkeyError| {
+            // SECURITY: Sanitize connection errors to avoid leaking credentials.
+            // The full error is logged to stderr for debugging.
+            let msg = e.to_string();
+            eprintln!("Database load error: {}", msg);
+            if msg.contains("connection") || msg.contains("authentication") || msg.contains("password") {
+                "Database connection failed. Check your connection string and credentials.".to_string()
+            } else {
+                e.into()
+            }
+        })
 }
 
 /// Compare schemas of the two loaded sources.

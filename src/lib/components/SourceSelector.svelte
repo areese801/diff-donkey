@@ -2,9 +2,14 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { loadSource } from "$lib/tauri";
   import { sourceA, sourceB } from "$lib/stores/config";
+  import DatabaseSource from "$lib/components/DatabaseSource.svelte";
   import type { TableMeta } from "$lib/types/diff";
 
+  type SourceMode = "file" | "database";
+
   /** Current state for each source panel */
+  let modeA: SourceMode = $state("file");
+  let modeB: SourceMode = $state("file");
   let metaA: TableMeta | null = $state(null);
   let metaB: TableMeta | null = $state(null);
   let errorA: string | null = $state(null);
@@ -56,50 +61,94 @@
       }
     }
   }
+
+  function handleDbLoaded(label: "a" | "b", meta: TableMeta) {
+    if (label === "a") {
+      metaA = meta;
+      sourceA.set(meta);
+    } else {
+      metaB = meta;
+      sourceB.set(meta);
+    }
+  }
 </script>
 
 <div class="source-selector">
   <div class="source-panel">
     <h3>Source A</h3>
-    <button onclick={() => pickFile("a")} disabled={loadingA}>
-      {loadingA ? "Loading..." : metaA ? "Change File" : "Select File"}
-    </button>
+    <div class="mode-toggle">
+      <button
+        class="toggle-btn"
+        class:active={modeA === "file"}
+        onclick={() => modeA = "file"}
+      >File</button>
+      <button
+        class="toggle-btn"
+        class:active={modeA === "database"}
+        onclick={() => modeA = "database"}
+      >Database</button>
+    </div>
 
-    {#if errorA}
-      <p class="error">{errorA}</p>
-    {/if}
+    {#if modeA === "file"}
+      <button class="pick-btn" onclick={() => pickFile("a")} disabled={loadingA}>
+        {loadingA ? "Loading..." : metaA ? "Change File" : "Select File"}
+      </button>
 
-    {#if metaA}
-      <div class="meta">
-        <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
-        <ul class="columns">
-          {#each metaA.columns as col}
-            <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-          {/each}
-        </ul>
-      </div>
+      {#if errorA}
+        <p class="error">{errorA}</p>
+      {/if}
+
+      {#if metaA && modeA === "file"}
+        <div class="meta">
+          <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
+          <ul class="columns">
+            {#each metaA.columns as col}
+              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    {:else}
+      <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
     {/if}
   </div>
 
   <div class="source-panel">
     <h3>Source B</h3>
-    <button onclick={() => pickFile("b")} disabled={loadingB}>
-      {loadingB ? "Loading..." : metaB ? "Change File" : "Select File"}
-    </button>
+    <div class="mode-toggle">
+      <button
+        class="toggle-btn"
+        class:active={modeB === "file"}
+        onclick={() => modeB = "file"}
+      >File</button>
+      <button
+        class="toggle-btn"
+        class:active={modeB === "database"}
+        onclick={() => modeB = "database"}
+      >Database</button>
+    </div>
 
-    {#if errorB}
-      <p class="error">{errorB}</p>
-    {/if}
+    {#if modeB === "file"}
+      <button class="pick-btn" onclick={() => pickFile("b")} disabled={loadingB}>
+        {loadingB ? "Loading..." : metaB ? "Change File" : "Select File"}
+      </button>
 
-    {#if metaB}
-      <div class="meta">
-        <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
-        <ul class="columns">
-          {#each metaB.columns as col}
-            <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-          {/each}
-        </ul>
-      </div>
+      {#if errorB}
+        <p class="error">{errorB}</p>
+      {/if}
+
+      {#if metaB && modeB === "file"}
+        <div class="meta">
+          <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
+          <ul class="columns">
+            {#each metaB.columns as col}
+              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    {:else}
+      <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
   </div>
 </div>
@@ -123,7 +172,36 @@
     font-size: 1.1em;
   }
 
-  button {
+  .mode-toggle {
+    display: flex;
+    gap: 0;
+    margin-bottom: 12px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .toggle-btn {
+    flex: 1;
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 500;
+    color: inherit;
+  }
+
+  .toggle-btn.active {
+    background: #396cd8;
+    color: white;
+  }
+
+  .toggle-btn:hover:not(.active) {
+    background: rgba(57, 108, 216, 0.1);
+  }
+
+  .pick-btn {
     width: 100%;
     padding: 10px;
     border-radius: 6px;
@@ -134,12 +212,12 @@
     color: inherit;
   }
 
-  button:hover:not(:disabled) {
+  .pick-btn:hover:not(:disabled) {
     border-color: #396cd8;
     color: #396cd8;
   }
 
-  button:disabled {
+  .pick-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
@@ -180,11 +258,20 @@
       border-color: #444;
     }
 
-    button {
+    .mode-toggle {
       border-color: #555;
     }
 
-    button:hover:not(:disabled) {
+    .toggle-btn.active {
+      background: #6b9aff;
+      color: #1a1a1a;
+    }
+
+    .pick-btn {
+      border-color: #555;
+    }
+
+    .pick-btn:hover:not(:disabled) {
       border-color: #24c8db;
       color: #24c8db;
     }

@@ -89,6 +89,9 @@ export interface DiffConfig {
   column_tolerances: Record<string, ColumnTolerance> | null;
 }
 
+/** Supported database types for remote loading */
+export type DatabaseType = "postgres" | "mysql";
+
 /** Paginated row data returned from backend */
 export interface PagedRows {
   columns: string[];

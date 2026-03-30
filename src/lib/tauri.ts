@@ -6,7 +6,7 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType } from "./types/diff";
 
 /** Load a file into DuckDB as source_a or source_b */
 export async function loadSource(
@@ -14,6 +14,16 @@ export async function loadSource(
   label: "a" | "b"
 ): Promise<TableMeta> {
   return invoke<TableMeta>("load_source", { path, label });
+}
+
+/** Load data from a remote database into DuckDB as source_a or source_b */
+export async function loadDatabaseSource(
+  connString: string,
+  query: string,
+  label: "a" | "b",
+  dbType: DatabaseType
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_database_source", { connString, query, label, dbType });
 }
 
 /** Compare schemas of the two loaded sources */
