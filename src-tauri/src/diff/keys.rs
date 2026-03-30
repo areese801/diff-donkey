@@ -4,6 +4,7 @@
 /// (created by stats.rs) and the original source tables.
 use duckdb::Connection;
 
+use crate::activity::ActivityLog;
 use crate::error::DiffDonkeyError;
 use crate::types::PagedRows;
 
@@ -18,6 +19,7 @@ pub fn get_exclusive_rows(
     pk_columns: &[String],
     page: usize,
     page_size: usize,
+    log: &ActivityLog,
 ) -> Result<PagedRows, DiffDonkeyError> {
     let (source_table, null_side) = match side {
         "a" => ("source_a", "b"),
@@ -58,7 +60,10 @@ pub fn get_exclusive_rows(
         source_table, pk_select, null_check, page_size, offset, join_conds, order_by
     );
 
+    let start = std::time::Instant::now();
     let rows = query_to_rows(conn, &sql, &columns)?;
+    let duration = start.elapsed().as_millis() as u64;
+    log.log_query("get_exclusive_rows", &sql, duration, Some(rows.len() as i64), None);
 
     Ok(PagedRows { columns, rows, total, page, page_size })
 }
@@ -73,6 +78,7 @@ pub fn get_duplicate_pks(
     pk_columns: &[String],
     page: usize,
     page_size: usize,
+    log: &ActivityLog,
 ) -> Result<PagedRows, DiffDonkeyError> {
     let source_table = match side {
         "a" => "source_a",
@@ -106,7 +112,10 @@ pub fn get_duplicate_pks(
         group_cols, source_table, group_cols, order_cols, page_size, offset
     );
 
+    let start = std::time::Instant::now();
     let rows = query_to_rows(conn, &sql, &columns)?;
+    let duration = start.elapsed().as_millis() as u64;
+    log.log_query("get_duplicate_pks", &sql, duration, Some(rows.len() as i64), None);
 
     Ok(PagedRows { columns, rows, total, page, page_size })
 }
@@ -197,28 +206,34 @@ fn row_value_to_json(row: &duckdb::Row, idx: usize) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::ActivityLog;
     use crate::diff::stats;
     use crate::loader;
     use duckdb::Connection;
 
+    fn test_log() -> ActivityLog {
+        ActivityLog::new()
+    }
+
     fn setup_diff_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        loader::load_csv(&conn, "../test-data/orders_a.csv", "source_a").unwrap();
-        loader::load_csv(&conn, "../test-data/orders_b.csv", "source_b").unwrap();
+        let log = test_log();
+        loader::load_csv(&conn, "../test-data/orders_a.csv", "source_a", &log).unwrap();
+        loader::load_csv(&conn, "../test-data/orders_b.csv", "source_b", &log).unwrap();
         let compare_cols: Vec<String> = vec![
             "customer_name".into(),
             "amount".into(),
             "status".into(),
             "created_at".into(),
         ];
-        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new()).unwrap();
+        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(), &log).unwrap();
         conn
     }
 
     #[test]
     fn test_exclusive_rows_a() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "a", &["id".to_string()], 0, 50).unwrap();
+        let result = get_exclusive_rows(&conn, "a", &["id".to_string()], 0, 50, &test_log()).unwrap();
 
         // Row 8 (Henry Wilson) only exists in A
         assert_eq!(result.total, 1);
@@ -228,7 +243,7 @@ mod tests {
     #[test]
     fn test_exclusive_rows_b() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "b", &["id".to_string()], 0, 50).unwrap();
+        let result = get_exclusive_rows(&conn, "b", &["id".to_string()], 0, 50, &test_log()).unwrap();
 
         // Row 11 (Karen Martinez) only exists in B
         assert_eq!(result.total, 1);
@@ -238,7 +253,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_pks() {
         let conn = setup_diff_conn();
-        let result = get_duplicate_pks(&conn, "a", &["id".to_string()], 0, 50).unwrap();
+        let result = get_duplicate_pks(&conn, "a", &["id".to_string()], 0, 50, &test_log()).unwrap();
 
         assert_eq!(result.total, 0);
         assert_eq!(result.rows.len(), 0);

@@ -1,3 +1,4 @@
+pub mod activity;
 mod commands;
 mod connections;
 mod db;
@@ -14,6 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(db_state)
+        .manage(activity::ActivityLog::new())
         .invoke_handler(tauri::generate_handler![
             commands::load_source,
             commands::load_database_source,
@@ -27,6 +29,8 @@ pub fn run() {
             commands::delete_connection,
             commands::test_connection,
             commands::load_from_saved_connection,
+            commands::get_activity_log,
+            commands::clear_activity_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

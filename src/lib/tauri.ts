@@ -6,7 +6,7 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry } from "./types/diff";
 import type { SavedConnection } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
@@ -105,4 +105,16 @@ export async function loadFromSavedConnection(
   label: "a" | "b"
 ): Promise<TableMeta> {
   return invoke<TableMeta>("load_from_saved_connection", { id, query, label });
+}
+
+// ─── Activity Log ────────────────────────────────────────────────────────────
+
+/** Get all SQL query log entries */
+export async function getActivityLog(): Promise<QueryLogEntry[]> {
+  return invoke<QueryLogEntry[]>("get_activity_log");
+}
+
+/** Clear the SQL query log */
+export async function clearActivityLog(): Promise<void> {
+  return invoke<void>("clear_activity_log");
 }

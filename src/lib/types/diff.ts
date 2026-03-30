@@ -102,3 +102,13 @@ export interface PagedRows {
   page: number;
   page_size: number;
 }
+
+/** A single SQL query log entry from the activity log */
+export interface QueryLogEntry {
+  timestamp: number;
+  operation: string;
+  sql: string;
+  duration_ms: number;
+  rows_affected: number | null;
+  error: string | null;
+}

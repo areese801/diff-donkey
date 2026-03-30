@@ -9,6 +9,7 @@
 /// works unchanged — it only cares that the tables exist with columns.
 use duckdb::Connection;
 
+use crate::activity::{self, ActivityLog};
 use crate::error::DiffDonkeyError;
 use crate::types::{ColumnInfo, TableMeta};
 
@@ -58,6 +59,7 @@ pub fn load_from_database(
     query: &str,
     table_name: &str,
     db_type: &DatabaseType,
+    log: &ActivityLog,
 ) -> Result<TableMeta, DiffDonkeyError> {
     // Validate inputs are not empty
     if conn_string.trim().is_empty() {
@@ -76,7 +78,7 @@ pub fn load_from_database(
 
     // Install and load the DuckDB extension
     let install_sql = format!("INSTALL {}; LOAD {};", ext, ext);
-    conn.execute_batch(&install_sql)?;
+    activity::execute_logged(conn, &install_sql, "install_db_extension", log)?;
 
     // SECURITY: Escape single quotes in connection string and query to prevent
     // SQL injection. The connection string and query come from the local desktop
@@ -88,7 +90,7 @@ pub fn load_from_database(
         "CREATE OR REPLACE TABLE \"{}\" AS SELECT * FROM {}('{}', '{}')",
         table_name, query_fn, escaped_conn, escaped_query
     );
-    conn.execute_batch(&create_sql)?;
+    activity::execute_logged(conn, &create_sql, "load_from_database", log)?;
 
     get_table_meta(conn, table_name)
 }
@@ -127,10 +129,14 @@ mod tests {
     use super::*;
     use duckdb::Connection;
 
+    fn test_log() -> ActivityLog {
+        ActivityLog::new()
+    }
+
     #[test]
     fn test_load_from_database_empty_conn_string() {
         let conn = Connection::open_in_memory().unwrap();
-        let result = load_from_database(&conn, "", "SELECT 1", "source_a", &DatabaseType::Postgres);
+        let result = load_from_database(&conn, "", "SELECT 1", "source_a", &DatabaseType::Postgres, &test_log());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Connection string cannot be empty"));
@@ -140,7 +146,7 @@ mod tests {
     fn test_load_from_database_whitespace_conn_string() {
         let conn = Connection::open_in_memory().unwrap();
         let result =
-            load_from_database(&conn, "   ", "SELECT 1", "source_a", &DatabaseType::Postgres);
+            load_from_database(&conn, "   ", "SELECT 1", "source_a", &DatabaseType::Postgres, &test_log());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Connection string cannot be empty"));
@@ -155,6 +161,7 @@ mod tests {
             "",
             "source_a",
             &DatabaseType::Postgres,
+            &test_log(),
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -170,6 +177,7 @@ mod tests {
             "   ",
             "source_a",
             &DatabaseType::MySQL,
+            &test_log(),
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();

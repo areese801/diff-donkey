@@ -12,6 +12,7 @@
 /// strings. Every IPC parameter must be validated before use in SQL.
 use tauri::State;
 
+use crate::activity::{self, ActivityLog};
 use crate::connections::{self, SavedConnection};
 use crate::db::DuckDbState;
 use crate::db_loader;
@@ -66,6 +67,7 @@ pub fn load_source(
     path: String,
     label: String,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<TableMeta, String> {
     // SECURITY: Validate label is exactly "a" or "b" — prevents table name injection.
     // Without this, a label like "a; DROP TABLE source_b; --" would inject SQL.
@@ -85,9 +87,9 @@ pub fn load_source(
 
     // Detect file type by extension
     let result = if path.ends_with(".parquet") || path.ends_with(".pq") {
-        loader::load_parquet(&conn, &path, &table_name)
+        loader::load_parquet(&conn, &path, &table_name, &log)
     } else {
-        loader::load_csv(&conn, &path, &table_name)
+        loader::load_csv(&conn, &path, &table_name, &log)
     };
 
     result.map_err(|e: DiffDonkeyError| e.into())
@@ -104,6 +106,7 @@ pub fn load_database_source(
     label: String,
     db_type: db_loader::DatabaseType,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<TableMeta, String> {
     // SECURITY: Validate label is exactly "a" or "b"
     if label != "a" && label != "b" {
@@ -117,8 +120,8 @@ pub fn load_database_source(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
-        |e: DiffDonkeyError| {
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log)
+        .map_err(|e: DiffDonkeyError| {
             // SECURITY: Sanitize connection errors to avoid leaking credentials.
             // The full error is logged to stderr for debugging.
             let msg = e.to_string();
@@ -153,7 +156,11 @@ pub fn get_schema_comparison(state: State<DuckDbState>) -> Result<SchemaComparis
 /// Accepts a `DiffConfig` with the primary key column, optional default tolerance,
 /// and optional per-column tolerance overrides.
 #[tauri::command]
-pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<OverviewResult, String> {
+pub fn run_diff(
+    config: DiffConfig,
+    state: State<DuckDbState>,
+    log: State<ActivityLog>,
+) -> Result<OverviewResult, String> {
     let conn = state
         .conn
         .lock()
@@ -223,6 +230,7 @@ pub fn run_diff(config: DiffConfig, state: State<DuckDbState>) -> Result<Overvie
         &column_types,
         config.tolerance,
         &column_tolerances,
+        &log,
     )
     .map_err(|e: DiffDonkeyError| e.into())
 }
@@ -242,6 +250,7 @@ pub fn get_exclusive_rows(
     page: usize,
     page_size: usize,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<PagedRows, String> {
     let page_size = page_size.min(MAX_PAGE_SIZE);
     let conn = state
@@ -250,7 +259,7 @@ pub fn get_exclusive_rows(
         .map_err(|e| format!("Lock error: {}", e))?;
     let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_exclusive_rows(&conn, &side, &pks, page, page_size)
+    diff::keys::get_exclusive_rows(&conn, &side, &pks, page, page_size, &log)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -261,6 +270,7 @@ pub fn get_duplicate_pks(
     page: usize,
     page_size: usize,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<PagedRows, String> {
     let page_size = page_size.min(MAX_PAGE_SIZE);
     let conn = state
@@ -269,7 +279,7 @@ pub fn get_duplicate_pks(
         .map_err(|e| format!("Lock error: {}", e))?;
     let pks = get_pk_columns(&conn)?;
 
-    diff::keys::get_duplicate_pks(&conn, &side, &pks, page, page_size)
+    diff::keys::get_duplicate_pks(&conn, &side, &pks, page, page_size, &log)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -283,6 +293,7 @@ pub fn get_diff_rows(
     column_filter: Option<String>,
     row_filter: Option<String>,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<PagedRows, String> {
     let page_size = page_size.min(MAX_PAGE_SIZE);
     let conn = state
@@ -417,13 +428,15 @@ pub fn get_diff_rows(
     };
 
     // Count total matching rows
-    let total: i64 = conn
-        .query_row(
-            &format!("SELECT COUNT(*) FROM _diff_join WHERE {}", where_clause),
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let count_sql = format!("SELECT COUNT(*) FROM _diff_join WHERE {}", where_clause);
+    let total: i64 = activity::query_row_logged(
+        &conn,
+        &count_sql,
+        "get_diff_rows_count",
+        &log,
+        |row| row.get(0),
+    )
+    .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
 
     // Get all non-metadata columns (pk + value columns, excluding is_diff_* and is_raw_diff_*)
     let mut col_stmt = conn
@@ -471,8 +484,17 @@ pub fn get_diff_rows(
         select_cols, where_clause, order_by, page_size, offset
     );
 
+    let start = std::time::Instant::now();
     let rows =
         diff::keys::query_to_rows_public(&conn, &sql, &all_columns).map_err(|e| e.to_string())?;
+    let duration = start.elapsed().as_millis() as u64;
+    log.log_query(
+        "get_diff_rows",
+        &sql,
+        duration,
+        Some(rows.len() as i64),
+        None,
+    );
 
     Ok(PagedRows {
         columns: all_columns,
@@ -551,6 +573,7 @@ pub fn load_from_saved_connection(
     label: String,
     app_handle: tauri::AppHandle,
     state: State<DuckDbState>,
+    log: State<ActivityLog>,
 ) -> Result<TableMeta, String> {
     // SECURITY: Validate label
     if label != "a" && label != "b" {
@@ -596,8 +619,8 @@ pub fn load_from_saved_connection(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type).map_err(
-        |e: DiffDonkeyError| {
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log)
+        .map_err(|e: DiffDonkeyError| {
             let msg = e.to_string();
             eprintln!("Database load error: {}", msg);
             if msg.contains("connection")
@@ -609,6 +632,19 @@ pub fn load_from_saved_connection(
             } else {
                 e.into()
             }
-        },
-    )
+        })
+}
+
+// ─── Activity Log Commands ──────────────────────────────────────────────────
+
+/// Get all SQL query log entries.
+#[tauri::command]
+pub fn get_activity_log(log: State<ActivityLog>) -> Vec<activity::QueryLogEntry> {
+    log.get_entries()
+}
+
+/// Clear the SQL query log.
+#[tauri::command]
+pub fn clear_activity_log(log: State<ActivityLog>) {
+    log.clear();
 }
