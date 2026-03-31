@@ -4,7 +4,7 @@
 
   interface Props {
     columns: ColumnInfo[];
-    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null) => void;
+    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null, ignoredColumns: string[], whereClause: string | null) => void;
     isLoading: boolean;
   }
 
@@ -28,6 +28,7 @@
     }
   });
   let ignoreCase = $state(false);
+  let whereClause = $state("");
   let showPerColumn = $state(false);
   let perColumnMode: Record<string, string> = $state({});
   let perColumnValue: Record<string, string> = $state({});
@@ -62,12 +63,14 @@
         { value: "default", label: "Default" },
         { value: "precision", label: "Custom Precision" },
         { value: "exact", label: "Exact" },
+        { value: "ignore", label: "Ignore" },
       ];
     }
     if (isTimestampType(dataType)) {
       return [
         { value: "exact", label: "Exact" },
         { value: "seconds", label: "Within N Seconds" },
+        { value: "ignore", label: "Ignore" },
       ];
     }
     return [
@@ -75,6 +78,7 @@
       { value: "case_insensitive", label: "Case Insensitive" },
       { value: "whitespace", label: "Trim Whitespace" },
       { value: "case_insensitive_whitespace", label: "Case + Trim" },
+      { value: "ignore", label: "Ignore" },
     ];
   }
 
@@ -84,8 +88,13 @@
     if (prec !== null && isNaN(prec)) return;
 
     const colTols: Record<string, ColumnTolerance> = {};
+    const ignoredCols: string[] = [];
     for (const col of nonPkColumns) {
       const mode = perColumnMode[col.name] || "default";
+      if (mode === "ignore") {
+        ignoredCols.push(col.name);
+        continue;
+      }
       if (mode === "default" || mode === "exact") continue;
 
       if (mode === "precision") {
@@ -112,7 +121,7 @@
     // Apply global case-insensitive toggle to string columns not already overridden
     if (ignoreCase) {
       for (const col of nonPkColumns) {
-        if (col.name in colTols) continue; // per-column override takes precedence
+        if (col.name in colTols || ignoredCols.includes(col.name)) continue;
         if (isStringType(col.data_type)) {
           colTols[col.name] = { mode: "case_insensitive" };
         }
@@ -120,7 +129,8 @@
     }
 
     const hasTols = Object.keys(colTols).length > 0;
-    onRunDiff(selectedPks, prec, hasTols ? colTols : null);
+    const trimmedWhere = whereClause.trim();
+    onRunDiff(selectedPks, prec, hasTols ? colTols : null, ignoredCols, trimmedWhere || null);
   }
 
   function needsValueInput(mode: string): boolean {
@@ -152,6 +162,14 @@
       <input type="checkbox" bind:checked={ignoreCase} disabled={isLoading} />
       Ignore Case
     </label>
+
+    <input
+      type="text"
+      placeholder="WHERE clause (e.g. status = 'active')"
+      bind:value={whereClause}
+      disabled={isLoading}
+      class="where-input"
+    />
 
     <button
       onclick={handleRun}
@@ -261,6 +279,16 @@
     color: inherit;
   }
 
+  .where-input {
+    width: 280px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+    background: white;
+    color: inherit;
+  }
+
   button {
     padding: 8px 20px;
     border-radius: 6px;
@@ -332,7 +360,8 @@
     }
 
     select,
-    .tolerance-input {
+    .tolerance-input,
+    .where-input {
       background: #2f2f2f;
       border-color: #555;
     }

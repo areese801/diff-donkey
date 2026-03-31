@@ -41,6 +41,8 @@
     selectedPks: string[],
     tolerance: number | null,
     columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
+    ignoredColumns: string[],
+    whereClause: string | null,
   ) {
     isLoading.set(true);
     diffError = null;
@@ -52,6 +54,8 @@
         pk_columns: selectedPks,
         tolerance,
         column_tolerances: columnTolerances,
+        ignored_columns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
+        where_clause: whereClause,
       });
       diffResult.set(result);
       diffPrecision.set(tolerance);

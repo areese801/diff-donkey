@@ -199,12 +199,13 @@ pub fn run_diff(
         }
     }
 
-    // Get shared columns (excluding PKs) to compare
+    // Get shared columns (excluding PKs and ignored columns) to compare
     let schema = diff::schema::compare_schemas(&conn).map_err(|e| e.to_string())?;
+    let ignored = config.ignored_columns.unwrap_or_default();
     let compare_columns: Vec<String> = schema
         .shared
         .iter()
-        .filter(|c| !pk_columns.contains(&c.name))
+        .filter(|c| !pk_columns.contains(&c.name) && !ignored.contains(&c.name))
         .map(|c| c.name.clone())
         .collect();
 
@@ -212,7 +213,7 @@ pub fn run_diff(
     let column_types: std::collections::HashMap<String, String> = schema
         .shared
         .iter()
-        .filter(|c| !pk_columns.contains(&c.name))
+        .filter(|c| !pk_columns.contains(&c.name) && !ignored.contains(&c.name))
         .map(|c| (c.name.clone(), c.type_a.clone()))
         .collect();
 
@@ -231,6 +232,7 @@ pub fn run_diff(
         &column_types,
         config.tolerance,
         &column_tolerances,
+        &config.where_clause,
         &log,
     )
     .map_err(|e: DiffDonkeyError| e.into())
