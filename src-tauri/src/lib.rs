@@ -7,6 +7,7 @@ mod diff;
 mod error;
 mod loader;
 pub mod snowflake;
+mod ssh_tunnel;
 mod types;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

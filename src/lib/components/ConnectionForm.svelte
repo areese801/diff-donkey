@@ -37,6 +37,16 @@
   let authMethod = $state("password");
   let privateKeyPath = $state("");
   let privateKeyFilename = $state("");
+  // SSH tunnel fields
+  let sshEnabled = $state(false);
+  let sshHost = $state("");
+  let sshPort = $state<number | string>(22);
+  let sshUsername = $state("");
+  let sshAuthMethod = $state("password");
+  let sshPassword = $state("");
+  let sshKeyPath = $state("");
+  let sshKeyFilename = $state("");
+  let sshExpanded = $state(false);
   let initialized = false;
 
   // Populate form from connection prop on mount
@@ -58,6 +68,19 @@
       privateKeyPath = connection.private_key_path ?? "";
       if (privateKeyPath) {
         privateKeyFilename = privateKeyPath.split(/[/\\]/).pop() ?? "";
+      }
+      // SSH fields
+      sshEnabled = connection.ssh_enabled ?? false;
+      sshHost = connection.ssh_host ?? "";
+      sshPort = connection.ssh_port ?? 22;
+      sshUsername = connection.ssh_username ?? "";
+      sshAuthMethod = connection.ssh_auth_method ?? "password";
+      sshKeyPath = connection.ssh_key_path ?? "";
+      if (sshKeyPath) {
+        sshKeyFilename = sshKeyPath.split(/[/\\]/).pop() ?? "";
+      }
+      if (sshEnabled) {
+        sshExpanded = true;
       }
       initialId = connection.id;
       initialCreatedAt = connection.created_at;
@@ -92,6 +115,17 @@
     }
   }
 
+  async function handleSelectSshKeyFile() {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "SSH Key", extensions: ["pem", "pub", "key"] }],
+    });
+    if (selected) {
+      sshKeyPath = selected as string;
+      sshKeyFilename = sshKeyPath.split(/[/\\]/).pop() ?? "";
+    }
+  }
+
   function buildConnection(): SavedConnection {
     const now = new Date().toISOString();
     return {
@@ -110,12 +144,12 @@
       role: dbType === "snowflake" ? (sfRole.trim() || null) : null,
       auth_method: dbType === "snowflake" ? authMethod : null,
       private_key_path: dbType === "snowflake" && authMethod === "keypair" ? (privateKeyPath || null) : null,
-      ssh_enabled: false,
-      ssh_host: null,
-      ssh_port: null,
-      ssh_username: null,
-      ssh_auth_method: null,
-      ssh_key_path: null,
+      ssh_enabled: sshEnabled,
+      ssh_host: sshEnabled ? (sshHost.trim() || null) : null,
+      ssh_port: sshEnabled ? (typeof sshPort === "string" ? parseInt(sshPort) || 22 : sshPort || 22) : null,
+      ssh_username: sshEnabled ? (sshUsername.trim() || null) : null,
+      ssh_auth_method: sshEnabled ? sshAuthMethod : null,
+      ssh_key_path: sshEnabled && sshAuthMethod === "key" ? (sshKeyPath || null) : null,
       created_at: initialCreatedAt || now,
       updated_at: now,
     };
@@ -128,7 +162,7 @@
 
     try {
       const conn = buildConnection();
-      const msg = await testConnection(conn, password || null);
+      const msg = await testConnection(conn, password || null, sshEnabled ? (sshPassword || null) : null);
       testResult = { success: true, message: msg };
     } catch (e) {
       testResult = {
@@ -151,7 +185,7 @@
 
     try {
       const conn = buildConnection();
-      await saveConnection(conn, password || null);
+      await saveConnection(conn, password || null, sshEnabled ? (sshPassword || null) : null);
       await loadConnections();
       onClose();
     } catch (e) {
@@ -311,6 +345,84 @@
         rows="4"
       ></textarea>
       <p class="help-text">Paste a full connection string. This will be used directly — saved connections store structured fields instead.</p>
+    </div>
+  {/if}
+
+  <!-- SSH Tunnel Section -->
+  {#if mode === "builder" && dbType !== "snowflake"}
+    <div class="ssh-section">
+      <button
+        class="ssh-toggle"
+        type="button"
+        onclick={() => (sshExpanded = !sshExpanded)}
+      >
+        <span class="ssh-toggle-icon">{sshExpanded ? "\u25BE" : "\u25B8"}</span>
+        SSH Tunnel
+        {#if sshEnabled}
+          <span class="ssh-badge">ON</span>
+        {/if}
+      </button>
+
+      {#if sshExpanded}
+        <div class="ssh-fields">
+          <div class="field full-width">
+            <label class="checkbox-label">
+              <input type="checkbox" bind:checked={sshEnabled} />
+              Enable SSH Tunnel
+            </label>
+          </div>
+
+          {#if sshEnabled}
+            <div class="ssh-grid">
+              <div class="field">
+                <label for="ssh-host">SSH Host</label>
+                <input id="ssh-host" type="text" bind:value={sshHost} placeholder="bastion.example.com" />
+              </div>
+
+              <div class="field">
+                <label for="ssh-port">SSH Port</label>
+                <input id="ssh-port" type="number" bind:value={sshPort} />
+              </div>
+
+              <div class="field">
+                <label for="ssh-username">SSH Username</label>
+                <input id="ssh-username" type="text" bind:value={sshUsername} placeholder="deploy" />
+              </div>
+
+              <div class="field">
+                <label for="ssh-auth-method">Auth Method</label>
+                <select id="ssh-auth-method" bind:value={sshAuthMethod}>
+                  <option value="password">Password</option>
+                  <option value="key">Key File</option>
+                </select>
+              </div>
+
+              {#if sshAuthMethod === "password"}
+                <div class="field full-width">
+                  <label for="ssh-password">SSH Password</label>
+                  <input id="ssh-password" type="password" bind:value={sshPassword} placeholder="Enter SSH password" />
+                </div>
+              {:else}
+                <div class="field full-width">
+                  <label for="ssh-keyfile">SSH Key File</label>
+                  <div class="key-file-row">
+                    <button id="ssh-keyfile" type="button" class="btn-secondary btn-small-file" onclick={handleSelectSshKeyFile}>
+                      Select Key File
+                    </button>
+                    {#if sshKeyFilename}
+                      <span class="key-filename">{sshKeyFilename}</span>
+                    {/if}
+                  </div>
+                </div>
+                <div class="field full-width">
+                  <label for="ssh-passphrase">Key Passphrase (optional)</label>
+                  <input id="ssh-passphrase" type="password" bind:value={sshPassword} placeholder="Enter passphrase if key is encrypted" />
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -548,6 +660,56 @@
     cursor: not-allowed;
   }
 
+  .ssh-section {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .ssh-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.03);
+    border: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: inherit;
+    text-align: left;
+  }
+
+  .ssh-toggle:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+
+  .ssh-toggle-icon {
+    font-size: 0.8em;
+  }
+
+  .ssh-badge {
+    margin-left: auto;
+    font-size: 0.75em;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(46, 204, 113, 0.2);
+    color: #27ae60;
+  }
+
+  .ssh-fields {
+    padding: 10px 12px;
+  }
+
+  .ssh-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
   @media (prefers-color-scheme: dark) {
     input[type="text"],
     input[type="password"],
@@ -578,6 +740,18 @@
 
     .btn-secondary {
       border-color: #555;
+    }
+
+    .ssh-section {
+      border-color: #444;
+    }
+
+    .ssh-toggle {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .ssh-toggle:hover {
+      background: rgba(255, 255, 255, 0.08);
     }
   }
 </style>

@@ -109,9 +109,10 @@ export async function listSavedConnections(): Promise<SavedConnection[]> {
 /** Save (create or update) a database connection */
 export async function saveConnection(
   conn: SavedConnection,
-  password: string | null
+  password: string | null,
+  sshPassword: string | null = null
 ): Promise<void> {
-  return invoke<void>("save_connection", { conn, password });
+  return invoke<void>("save_connection", { conn, password, sshPassword });
 }
 
 /** Delete a saved connection by ID */
@@ -122,9 +123,10 @@ export async function deleteConnection(id: string): Promise<void> {
 /** Test a database connection */
 export async function testConnection(
   conn: SavedConnection,
-  password: string | null
+  password: string | null,
+  sshPassword: string | null = null
 ): Promise<string> {
-  return invoke<string>("test_connection", { conn, password });
+  return invoke<string>("test_connection", { conn, password, sshPassword });
 }
 
 /** Load data from a saved connection into DuckDB */

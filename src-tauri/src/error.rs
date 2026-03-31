@@ -20,6 +20,9 @@ pub enum DiffDonkeyError {
 
     #[error("Snowflake error: {0}")]
     Snowflake(String),
+
+    #[error("SSH error: {0}")]
+    Ssh(String),
 }
 
 /// Tauri commands need to return `Result<T, String>` for the frontend.
@@ -38,7 +41,8 @@ impl From<DiffDonkeyError> for String {
                 eprintln!("DuckDB error: {}", msg);
                 // Return a safe summary to the frontend
                 if msg.contains("does not exist") || msg.contains("not found") {
-                    "Database error: table or column not found. Try reloading your sources.".to_string()
+                    "Database error: table or column not found. Try reloading your sources."
+                        .to_string()
                 } else if msg.contains("read_csv") || msg.contains("read_parquet") {
                     "Error reading file. Please check the file format and try again.".to_string()
                 } else {
@@ -52,6 +56,19 @@ impl From<DiffDonkeyError> for String {
             }
             // Validation errors are user-facing by design — safe to pass through
             DiffDonkeyError::Validation(msg) => msg.clone(),
+            // SSH errors may contain hostnames or key paths — sanitize
+            DiffDonkeyError::Ssh(msg) => {
+                eprintln!("SSH error: {}", msg);
+                if msg.contains("authentication") || msg.contains("rejected") {
+                    "SSH authentication failed. Check your SSH credentials.".to_string()
+                } else if msg.contains("connection") || msg.contains("Connection refused") {
+                    "SSH connection failed. Check the SSH host and port.".to_string()
+                } else if msg.contains("key") {
+                    msg.clone() // Key-related messages are user-actionable
+                } else {
+                    "An SSH tunnel error occurred. Check the console for details.".to_string()
+                }
+            }
             // Snowflake errors may contain tokens or credentials — sanitize
             DiffDonkeyError::Snowflake(msg) => {
                 eprintln!("Snowflake error: {}", msg);

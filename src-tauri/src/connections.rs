@@ -36,8 +36,8 @@ pub struct SavedConnection {
     pub account_url: Option<String>,
     pub warehouse: Option<String>,
     pub role: Option<String>,
-    pub auth_method: Option<String>,        // "password" | "keypair"
-    pub private_key_path: Option<String>,   // Path to .p8/.pem file
+    pub auth_method: Option<String>,      // "password" | "keypair"
+    pub private_key_path: Option<String>, // Path to .p8/.pem file
     // SSH tunnel (placeholder for Phase 3)
     pub ssh_enabled: bool,
     pub ssh_host: Option<String>,
@@ -79,10 +79,12 @@ pub fn list_connections(path: &PathBuf) -> Result<Vec<SavedConnection>, DiffDonk
 ///
 /// If a connection with the same `id` exists, it's replaced. Otherwise, it's appended.
 /// The password is stored separately in the OS keychain, keyed by the connection's UUID.
+/// SSH password is stored under a separate keychain entry: `diff-donkey/{id}/ssh`.
 pub fn save_connection(
     path: &PathBuf,
     conn: SavedConnection,
     password: Option<String>,
+    ssh_password: Option<String>,
 ) -> Result<(), DiffDonkeyError> {
     // Validate required fields
     validate_connection(&conn)?;
@@ -107,10 +109,18 @@ pub fn save_connection(
         .map_err(|e| DiffDonkeyError::Validation(e.to_string()))?;
     std::fs::write(path, json)?;
 
-    // Store password in keychain (if provided)
+    // Store DB password in keychain (if provided)
     if let Some(pw) = password {
         if !pw.is_empty() {
             store_password(&conn.id, &pw)?;
+        }
+    }
+
+    // Store SSH password in keychain (if provided)
+    if let Some(ssh_pw) = ssh_password {
+        if !ssh_pw.is_empty() {
+            let ssh_key = format!("{}/ssh", conn.id);
+            store_password(&ssh_key, &ssh_pw)?;
         }
     }
 
@@ -127,10 +137,18 @@ pub fn delete_connection(path: &PathBuf, id: &str) -> Result<(), DiffDonkeyError
         .map_err(|e| DiffDonkeyError::Validation(e.to_string()))?;
     std::fs::write(path, json)?;
 
-    // Remove password from keychain (ignore errors — may not exist)
+    // Remove passwords from keychain (ignore errors — may not exist)
     let _ = delete_password(id);
+    let ssh_key = format!("{}/ssh", id);
+    let _ = delete_password(&ssh_key);
 
     Ok(())
+}
+
+/// Retrieve the SSH password from the OS keychain by connection ID.
+pub fn get_ssh_password(id: &str) -> Result<Option<String>, DiffDonkeyError> {
+    let ssh_key = format!("{}/ssh", id);
+    get_password(&ssh_key)
 }
 
 /// Retrieve a password from the OS keychain by connection ID.
@@ -203,6 +221,27 @@ pub fn validate_connection(conn: &SavedConnection) -> Result<(), DiffDonkeyError
             {
                 return Err(DiffDonkeyError::Validation(
                     "Private key path is required for key-pair authentication".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Validate SSH fields when SSH is enabled
+    if conn.ssh_enabled {
+        if conn.ssh_host.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(DiffDonkeyError::Validation(
+                "SSH host is required when SSH tunneling is enabled".to_string(),
+            ));
+        }
+        if conn.ssh_username.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(DiffDonkeyError::Validation(
+                "SSH username is required when SSH tunneling is enabled".to_string(),
+            ));
+        }
+        if conn.ssh_auth_method.as_deref() == Some("key") {
+            if conn.ssh_key_path.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(DiffDonkeyError::Validation(
+                    "SSH key file path is required for key authentication".to_string(),
                 ));
             }
         }
@@ -297,17 +336,37 @@ fn build_mysql_connection_string(conn: &SavedConnection, password: Option<&str>)
 /// Uses the same DuckDB extension mechanism as `db_loader::load_from_database`,
 /// but only runs `SELECT 1` to verify connectivity without loading data.
 /// For Snowflake, uses the REST API client instead.
+/// If SSH tunneling is enabled, establishes a tunnel first and tests through it.
 pub fn test_connection(
     duck_conn: &duckdb::Connection,
     conn: &SavedConnection,
     password: Option<&str>,
+    ssh_password: Option<&str>,
 ) -> Result<String, DiffDonkeyError> {
     // Snowflake uses its own REST API — not DuckDB extensions
     if conn.db_type == "snowflake" {
         return test_snowflake_connection(conn, password);
     }
 
-    let conn_string = build_connection_string(conn, password);
+    // If SSH tunneling is enabled, establish tunnel and rewrite host/port
+    let _tunnel: Option<crate::ssh_tunnel::SshTunnel>;
+    let effective_conn: std::borrow::Cow<'_, SavedConnection>;
+
+    if conn.ssh_enabled {
+        let tunnel_config =
+            crate::ssh_tunnel::build_tunnel_config(conn, ssh_password.map(|s| s.to_string()))?;
+        let tunnel = crate::ssh_tunnel::start_tunnel(&tunnel_config)?;
+        let mut tunneled = conn.clone();
+        tunneled.host = Some("127.0.0.1".to_string());
+        tunneled.port = Some(tunnel.local_port);
+        _tunnel = Some(tunnel);
+        effective_conn = std::borrow::Cow::Owned(tunneled);
+    } else {
+        _tunnel = None;
+        effective_conn = std::borrow::Cow::Borrowed(conn);
+    }
+
+    let conn_string = build_connection_string(&effective_conn, password);
 
     if conn_string.trim().is_empty() {
         return Err(DiffDonkeyError::Validation(
@@ -315,13 +374,13 @@ pub fn test_connection(
         ));
     }
 
-    let db_type = match conn.db_type.as_str() {
+    let db_type = match effective_conn.db_type.as_str() {
         "postgres" => crate::db_loader::DatabaseType::Postgres,
         "mysql" => crate::db_loader::DatabaseType::MySQL,
         _ => {
             return Err(DiffDonkeyError::Validation(format!(
                 "Testing not yet supported for '{}'",
-                conn.db_type
+                effective_conn.db_type
             )));
         }
     };
@@ -339,6 +398,7 @@ pub fn test_connection(
 
     duck_conn.execute_batch(&test_sql)?;
 
+    // _tunnel is dropped here, which signals the background thread to stop
     Ok("Connection successful".to_string())
 }
 
@@ -380,8 +440,8 @@ fn test_snowflake_connection(
             schema: config.schema,
         };
         // Just authenticate and run SELECT 1 — we don't need to load results
-        let duck_conn = duckdb::Connection::open_in_memory()
-            .map_err(|e| DiffDonkeyError::DuckDb(e))?;
+        let duck_conn =
+            duckdb::Connection::open_in_memory().map_err(|e| DiffDonkeyError::DuckDb(e))?;
         let log = crate::activity::ActivityLog::new();
         crate::snowflake::load_snowflake(
             client_config,
@@ -404,12 +464,9 @@ pub fn build_snowflake_auth(
 ) -> Result<crate::snowflake::SnowflakeAuth, DiffDonkeyError> {
     match conn.auth_method.as_deref() {
         Some("keypair") => {
-            let key_path = conn
-                .private_key_path
-                .as_deref()
-                .ok_or_else(|| {
-                    DiffDonkeyError::Validation("Private key path is required".to_string())
-                })?;
+            let key_path = conn.private_key_path.as_deref().ok_or_else(|| {
+                DiffDonkeyError::Validation("Private key path is required".to_string())
+            })?;
 
             let private_key_pem = std::fs::read_to_string(key_path).map_err(|e| {
                 DiffDonkeyError::Snowflake(format!(
@@ -572,7 +629,8 @@ mod tests {
         for db_type in &["postgres", "mysql", "snowflake"] {
             let mut conn = test_conn(db_type);
             if *db_type == "snowflake" {
-                conn.account_url = Some("https://myorg-myaccount.snowflakecomputing.com".to_string());
+                conn.account_url =
+                    Some("https://myorg-myaccount.snowflakecomputing.com".to_string());
             }
             assert!(
                 validate_connection(&conn).is_ok(),
@@ -698,6 +756,98 @@ mod tests {
         conn.username = Some("user".to_string());
         conn.auth_method = Some("keypair".to_string());
         conn.private_key_path = Some("/path/to/key.p8".to_string());
+        assert!(validate_connection(&conn).is_ok());
+    }
+
+    // ─── SSH Validation Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_ssh_enabled_missing_host() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = None;
+        conn.ssh_username = Some("sshuser".to_string());
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("SSH host is required"));
+    }
+
+    #[test]
+    fn test_validate_ssh_enabled_empty_host() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = Some("  ".to_string());
+        conn.ssh_username = Some("sshuser".to_string());
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("SSH host is required"));
+    }
+
+    #[test]
+    fn test_validate_ssh_enabled_missing_username() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = Some("bastion.example.com".to_string());
+        conn.ssh_username = None;
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("SSH username is required"));
+    }
+
+    #[test]
+    fn test_validate_ssh_key_auth_missing_path() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = Some("bastion.example.com".to_string());
+        conn.ssh_username = Some("sshuser".to_string());
+        conn.ssh_auth_method = Some("key".to_string());
+        conn.ssh_key_path = None;
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("SSH key file path is required"));
+    }
+
+    #[test]
+    fn test_validate_ssh_disabled_no_requirements() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = false;
+        conn.ssh_host = None;
+        conn.ssh_username = None;
+        conn.ssh_auth_method = None;
+        conn.ssh_key_path = None;
+        assert!(validate_connection(&conn).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ssh_enabled_valid_password_auth() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = Some("bastion.example.com".to_string());
+        conn.ssh_username = Some("sshuser".to_string());
+        conn.ssh_auth_method = Some("password".to_string());
+        assert!(validate_connection(&conn).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ssh_enabled_valid_key_auth() {
+        let mut conn = test_conn("postgres");
+        conn.ssh_enabled = true;
+        conn.ssh_host = Some("bastion.example.com".to_string());
+        conn.ssh_username = Some("sshuser".to_string());
+        conn.ssh_auth_method = Some("key".to_string());
+        conn.ssh_key_path = Some("/home/user/.ssh/id_rsa".to_string());
         assert!(validate_connection(&conn).is_ok());
     }
 }

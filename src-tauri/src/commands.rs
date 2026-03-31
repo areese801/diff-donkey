@@ -121,8 +121,8 @@ pub fn load_database_source(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log)
-        .map_err(|e: DiffDonkeyError| {
+    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log).map_err(
+        |e: DiffDonkeyError| {
             // SECURITY: Sanitize connection errors to avoid leaking credentials.
             // The full error is logged to stderr for debugging.
             let msg = e.to_string();
@@ -430,14 +430,11 @@ pub fn get_diff_rows(
 
     // Count total matching rows
     let count_sql = format!("SELECT COUNT(*) FROM _diff_join WHERE {}", where_clause);
-    let total: i64 = activity::query_row_logged(
-        &conn,
-        &count_sql,
-        "get_diff_rows_count",
-        &log,
-        |row| row.get(0),
-    )
-    .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+    let total: i64 =
+        activity::query_row_logged(&conn, &count_sql, "get_diff_rows_count", &log, |row| {
+            row.get(0)
+        })
+        .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
 
     // Get all non-metadata columns (pk + value columns, excluding is_diff_* and is_raw_diff_*)
     let mut col_stmt = conn
@@ -596,14 +593,16 @@ pub fn list_saved_connections(
 
 /// Save (create or update) a database connection.
 /// Password is stored separately in the OS keychain.
+/// SSH password is stored under a separate keychain entry.
 #[tauri::command]
 pub fn save_connection(
     app_handle: tauri::AppHandle,
     conn: SavedConnection,
     password: Option<String>,
+    ssh_password: Option<String>,
 ) -> Result<(), String> {
     let path = connections::get_connections_path(&app_handle);
-    connections::save_connection(&path, conn, password).map_err(|e| {
+    connections::save_connection(&path, conn, password, ssh_password).map_err(|e| {
         eprintln!("Save connection error: {}", e);
         e.to_string()
     })
@@ -617,10 +616,12 @@ pub fn delete_connection(app_handle: tauri::AppHandle, id: String) -> Result<(),
 }
 
 /// Test a database connection by attempting a simple query.
+/// If SSH tunneling is enabled, establishes a tunnel first.
 #[tauri::command]
 pub fn test_connection(
     conn: SavedConnection,
     password: Option<String>,
+    ssh_password: Option<String>,
     state: State<DuckDbState>,
 ) -> Result<String, String> {
     let duck_conn = state
@@ -628,7 +629,13 @@ pub fn test_connection(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    connections::test_connection(&duck_conn, &conn, password.as_deref()).map_err(|e| {
+    connections::test_connection(
+        &duck_conn,
+        &conn,
+        password.as_deref(),
+        ssh_password.as_deref(),
+    )
+    .map_err(|e| {
         let msg = e.to_string();
         eprintln!("Test connection error: {}", msg);
         if msg.contains("connection") || msg.contains("authentication") || msg.contains("password")
@@ -677,12 +684,14 @@ pub async fn load_from_saved_connection(
 
     // Snowflake uses its own REST API — not DuckDB extensions
     if saved.db_type == "snowflake" {
-        let account_url = saved.account_url.as_deref().ok_or(
-            "Account URL is required for Snowflake connections",
-        )?;
-        let username = saved.username.as_deref().ok_or(
-            "Username is required for Snowflake connections",
-        )?;
+        let account_url = saved
+            .account_url
+            .as_deref()
+            .ok_or("Account URL is required for Snowflake connections")?;
+        let username = saved
+            .username
+            .as_deref()
+            .ok_or("Username is required for Snowflake connections")?;
 
         let sf_config = snowflake::SnowflakeConfig {
             account_url: account_url.to_string(),
@@ -692,9 +701,8 @@ pub async fn load_from_saved_connection(
             schema: saved.schema.clone(),
         };
 
-        let sf_auth =
-            connections::build_snowflake_auth(saved, username, password.as_deref())
-                .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+        let sf_auth = connections::build_snowflake_auth(saved, username, password.as_deref())
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
 
         // Phase 1: HTTP — fetch results without holding DuckDB lock
         let result = snowflake::fetch_snowflake(sf_config, sf_auth, &query)
@@ -719,20 +727,46 @@ pub async fn load_from_saved_connection(
             .map_err(|e: DiffDonkeyError| e.into());
     }
 
+    // If SSH tunneling is enabled, establish tunnel and rewrite host/port
+    let _tunnel: Option<crate::ssh_tunnel::SshTunnel>;
+    let effective_conn: SavedConnection;
+
+    if saved.ssh_enabled {
+        // Retrieve SSH password from keychain
+        let ssh_password = connections::get_ssh_password(&id).map_err(|e| {
+            eprintln!("Keyring error (SSH): {}", e);
+            "Failed to retrieve stored SSH password.".to_string()
+        })?;
+
+        let tunnel_config = crate::ssh_tunnel::build_tunnel_config(saved, ssh_password)
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+        let tunnel = crate::ssh_tunnel::start_tunnel(&tunnel_config)
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+        let mut tunneled = saved.clone();
+        tunneled.host = Some("127.0.0.1".to_string());
+        tunneled.port = Some(tunnel.local_port);
+        _tunnel = Some(tunnel);
+        effective_conn = tunneled;
+    } else {
+        _tunnel = None;
+        effective_conn = saved.clone();
+    }
+
     // Build connection string for postgres/mysql
-    let conn_string = connections::build_connection_string(saved, password.as_deref());
+    let conn_string = connections::build_connection_string(&effective_conn, password.as_deref());
     if conn_string.trim().is_empty() {
         return Err("Could not build connection string — check connection settings.".to_string());
     }
 
     // Determine database type for DuckDB extension
-    let db_type = match saved.db_type.as_str() {
+    let db_type = match effective_conn.db_type.as_str() {
         "postgres" => db_loader::DatabaseType::Postgres,
         "mysql" => db_loader::DatabaseType::MySQL,
         _ => {
             return Err(format!(
                 "Database type '{}' not yet supported for loading",
-                saved.db_type
+                effective_conn.db_type
             ))
         }
     };
@@ -742,20 +776,24 @@ pub async fn load_from_saved_connection(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log)
-        .map_err(|e: DiffDonkeyError| {
-            let msg = e.to_string();
-            eprintln!("Database load error: {}", msg);
-            if msg.contains("connection")
-                || msg.contains("authentication")
-                || msg.contains("password")
-            {
-                "Database connection failed. Check your connection settings and credentials."
-                    .to_string()
-            } else {
-                e.into()
-            }
-        })
+    let result =
+        db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log)
+            .map_err(|e: DiffDonkeyError| {
+                let msg = e.to_string();
+                eprintln!("Database load error: {}", msg);
+                if msg.contains("connection")
+                    || msg.contains("authentication")
+                    || msg.contains("password")
+                {
+                    "Database connection failed. Check your connection settings and credentials."
+                        .to_string()
+                } else {
+                    e.into()
+                }
+            });
+
+    // _tunnel is dropped here, which signals the background thread to stop
+    result
 }
 
 // ─── Activity Log Commands ──────────────────────────────────────────────────
