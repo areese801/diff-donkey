@@ -233,6 +233,7 @@ pub fn run_diff(
         config.tolerance,
         &column_tolerances,
         &config.where_clause,
+        &ignored,
         &log,
     )
     .map_err(|e: DiffDonkeyError| e.into())

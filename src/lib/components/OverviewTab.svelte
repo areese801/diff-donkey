@@ -3,9 +3,10 @@
 
   interface Props {
     result: OverviewResult | null;
+    ignoredColumns?: string[];
   }
 
-  let { result }: Props = $props();
+  let { result, ignoredColumns = [] }: Props = $props();
 
   /** Overall match percentage across all columns */
   let overallMatchPct = $derived(() => {
@@ -133,6 +134,13 @@
                   <div class="mini-bar-fill" style="width: {col.match_pct}%"></div>
                 </div>
               </td>
+            </tr>
+          {/each}
+          {#each ignoredColumns as col}
+            <tr class="ignored-row">
+              <td><code>{col}</code></td>
+              <td colspan="4" class="ignored-label">Ignored</td>
+              <td></td>
             </tr>
           {/each}
         </tbody>
@@ -304,6 +312,19 @@
   .has-minor {
     color: #e67e22;
     font-weight: 500;
+  }
+
+  .ignored-row {
+    opacity: 0.45;
+  }
+
+  .ignored-row code {
+    text-decoration: line-through;
+  }
+
+  .ignored-label {
+    font-style: italic;
+    color: #999;
   }
 
   .mini-bar {

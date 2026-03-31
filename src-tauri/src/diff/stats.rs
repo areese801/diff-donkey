@@ -60,6 +60,7 @@ pub fn run_diff(
     default_precision: Option<i32>,
     column_tolerances: &HashMap<String, ColumnTolerance>,
     where_clause: &Option<String>,
+    ignored_columns: &[String],
     log: &ActivityLog,
 ) -> Result<OverviewResult, DiffDonkeyError> {
     // Step 1: Build the materialized join table
@@ -71,6 +72,7 @@ pub fn run_diff(
         default_precision,
         column_tolerances,
         where_clause,
+        ignored_columns,
         log,
     )?;
 
@@ -186,6 +188,7 @@ fn build_diff_join(
     default_precision: Option<i32>,
     column_tolerances: &HashMap<String, ColumnTolerance>,
     where_clause: &Option<String>,
+    ignored_columns: &[String],
     log: &ActivityLog,
 ) -> Result<(), DiffDonkeyError> {
     // PK columns: pk_{name}_a, pk_{name}_b for each PK column
@@ -233,6 +236,12 @@ fn build_diff_join(
         .map(|pk| format!("a.\"{}\" = b.\"{}\"", pk, pk))
         .collect::<Vec<_>>()
         .join(" AND ");
+
+    // Include ignored columns as value-only (no diff flags)
+    for col in ignored_columns {
+        select_parts.push(format!("a.\"{}\" as \"{}_a\"", col, col));
+        select_parts.push(format!("b.\"{}\" as \"{}_b\"", col, col));
+    }
 
     let (source_a_expr, source_b_expr) = match where_clause {
         Some(clause) if !clause.trim().is_empty() => (
@@ -501,7 +510,7 @@ mod tests {
         let col_types = get_test_column_types();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &[], &test_log()).unwrap();
 
         assert_eq!(result.total_rows_a, 10);
         assert_eq!(result.total_rows_b, 10);
@@ -523,7 +532,7 @@ mod tests {
         let col_types = get_test_column_types();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &[], &test_log()).unwrap();
 
         let name_stats = result.diff_stats.columns.iter().find(|c| c.name == "customer_name").unwrap();
         assert_eq!(name_stats.diff_count, 1); // "Eve Davis" vs "eve davis"
@@ -550,7 +559,7 @@ mod tests {
         let col_types = get_test_column_types();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &compare_cols, &col_types, None, &no_col_tol, &None, &[], &test_log()).unwrap();
 
         assert_eq!(result.values_summary.total_compared, 9);
         assert_eq!(result.values_summary.rows_with_diffs, 7); // rows 1,2,3,5,6,7,10
@@ -629,7 +638,7 @@ mod tests {
         let no_col_tol = HashMap::new();
 
         // precision=0 → round to integer: 100.0→100, 100.3→100 (match); 200.5→201, 205.0→205 (diff)
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         let amount = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
         assert_eq!(amount.diff_count, 1); // only id=2 differs at integer precision
@@ -660,7 +669,7 @@ mod tests {
 
         // precision=2: TRUNC(0.1234,2)=0.12, TRUNC(0.1235,2)=0.12 → match
         //              TRUNC(0.1234,2)=0.12, TRUNC(0.1244,2)=0.12 → match
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(2), &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(2), &no_col_tol, &None, &[], &test_log()).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         assert_eq!(val.diff_count, 0); // both match at 2dp
 
@@ -679,7 +688,7 @@ mod tests {
 
         // precision=3: TRUNC(0.1234,3)=0.123, TRUNC(0.1239,3)=0.123 → match!
         //              TRUNC(0.1234,3)=0.123, TRUNC(0.1254,3)=0.125 → diff
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(3), &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(3), &no_col_tol, &None, &[], &test_log()).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         assert_eq!(val.diff_count, 1);
     }
@@ -693,7 +702,7 @@ mod tests {
         let no_col_tol = HashMap::new();
 
         // Even with high precision, string columns use IS DISTINCT FROM
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(10), &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(10), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         let status = result.diff_stats.columns.iter().find(|c| c.name == "status").unwrap();
         assert_eq!(status.diff_count, 1);
@@ -724,7 +733,7 @@ mod tests {
         let no_col_tol = HashMap::new();
 
         // precision=0: TRUNC(100.0,0)=100, TRUNC(100.4,0)=100 → match
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         // id=1: NULL vs NULL → match
         // id=2: NULL vs 100.0 → diff
@@ -759,7 +768,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("weight".to_string(), ColumnTolerance::Precision { precision: 2 })].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &col_tol, &None, &[], &test_log()).unwrap();
 
         let price = result.diff_stats.columns.iter().find(|c| c.name == "price").unwrap();
         // precision=0: TRUNC(100.0,0)=100, TRUNC(100.4,0)=100 → match
@@ -794,7 +803,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("amount".to_string(), ColumnTolerance::Precision { precision: 1 })].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &col_tol, &None, &[], &test_log()).unwrap();
 
         let amount = result.diff_stats.columns.iter().find(|c| c.name == "amount").unwrap();
         assert_eq!(amount.diff_count, 1);
@@ -822,7 +831,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("ts".to_string(), ColumnTolerance::Seconds { seconds: 5.0 })].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &[], &test_log()).unwrap();
         let ts = result.diff_stats.columns.iter().find(|c| c.name == "ts").unwrap();
         assert_eq!(ts.diff_count, 1);  // id=1 within 5s, id=2 exceeds
         assert_eq!(ts.match_count, 1);
@@ -850,7 +859,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("name".to_string(), ColumnTolerance::CaseInsensitive)].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &[], &test_log()).unwrap();
         let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
         assert_eq!(name.diff_count, 1);  // "Bob" vs "Bobby" still differs
         assert_eq!(name.match_count, 1); // "Alice" vs "alice" matches
@@ -876,7 +885,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("name".to_string(), ColumnTolerance::Whitespace)].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &[], &test_log()).unwrap();
         let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
         assert_eq!(name.diff_count, 1);  // "Bob" vs "Bobby"
         assert_eq!(name.match_count, 1); // "  Alice  " vs "Alice" matches after trim
@@ -902,7 +911,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("name".to_string(), ColumnTolerance::CaseInsensitiveWhitespace)].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &[], &test_log()).unwrap();
         let name = result.diff_stats.columns.iter().find(|c| c.name == "name").unwrap();
         assert_eq!(name.diff_count, 0);  // both match with case+trim
     }
@@ -923,7 +932,7 @@ mod tests {
         let col_tol: HashMap<String, ColumnTolerance> =
             [("val".to_string(), ColumnTolerance::Precision { precision: 3 })].into_iter().collect();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &col_tol, &None, &[], &test_log()).unwrap();
         let val = result.diff_stats.columns.iter().find(|c| c.name == "val").unwrap();
         assert_eq!(val.diff_count, 0);
     }
@@ -955,7 +964,7 @@ mod tests {
 
         let result = run_diff(
             &conn, &["order_id".to_string(), "line_id".to_string()],
-            &cols, &col_types, None, &no_tol, &None, &test_log(),
+            &cols, &col_types, None, &no_tol, &None, &[], &test_log(),
         ).unwrap();
 
         assert_eq!(result.pk_summary.exclusive_a, 1);
@@ -984,7 +993,7 @@ mod tests {
         let cols: Vec<String> = vec!["name".into()];
         let col_types = HashMap::new();
         let no_tol = HashMap::new();
-        let result = run_diff(&conn, &["order_id".to_string(), "line_id".to_string()], &cols, &col_types, None, &no_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["order_id".to_string(), "line_id".to_string()], &cols, &col_types, None, &no_tol, &None, &[], &test_log()).unwrap();
         assert_eq!(result.pk_summary.duplicate_pks_a, 1);
         assert_eq!(result.pk_summary.duplicate_pks_b, 0);
     }
@@ -1005,7 +1014,7 @@ mod tests {
         let cols: Vec<String> = vec!["name".into()];
         let col_types = HashMap::new();
         let no_tol = HashMap::new();
-        let result = run_diff(&conn, &["order_id".to_string(), "line_id".to_string()], &cols, &col_types, None, &no_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["order_id".to_string(), "line_id".to_string()], &cols, &col_types, None, &no_tol, &None, &[], &test_log()).unwrap();
         assert_eq!(result.pk_summary.null_pks_a, 2);
         assert_eq!(result.pk_summary.null_pks_b, 0);
     }
@@ -1030,7 +1039,7 @@ mod tests {
         let result = run_diff(
             &conn,
             &["order_id".to_string(), "line_id".to_string(), "region".to_string()],
-            &cols, &col_types, None, &no_tol, &None, &test_log(),
+            &cols, &col_types, None, &no_tol, &None, &[], &test_log(),
         ).unwrap();
         assert_eq!(result.values_summary.total_compared, 2);
         assert_eq!(result.values_summary.rows_with_diffs, 1);
@@ -1068,7 +1077,7 @@ mod tests {
         // precision=0: 100.0 rounds to 100, 100.3 rounds to 100 → match (minor diff)
         // id=3: status differs (pending vs shipped) → real diff
         let result =
-            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         assert_eq!(result.values_summary.rows_with_diffs, 1); // id=3
         assert_eq!(result.values_summary.rows_minor, 1); // id=1 (amount diff suppressed)
@@ -1096,6 +1105,7 @@ mod tests {
             None,
             &no_col_tol,
             &None,
+            &[],
             &test_log(),
         )
         .unwrap();
@@ -1114,7 +1124,7 @@ mod tests {
         let col_types = tolerance_column_types();
         let no_col_tol = HashMap::new();
 
-        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         // Verify is_raw_diff_* columns exist in _diff_join
         let mut stmt = conn
@@ -1157,7 +1167,7 @@ mod tests {
         let no_col_tol = HashMap::new();
 
         // precision=0 suppresses 100.3 vs 100.0
-        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+        run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         let is_diff: i32 = conn
             .query_row("SELECT \"is_diff_amount\" FROM _diff_join", [], |row| row.get(0))
@@ -1194,7 +1204,7 @@ mod tests {
         ].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &None, &[], &test_log()).unwrap();
 
         // Should only have 2 columns (name, amount), not 3
         assert_eq!(result.diff_stats.columns.len(), 2);
@@ -1232,7 +1242,7 @@ mod tests {
         let no_col_tol = HashMap::new();
         let where_clause = Some("status = 'active'".to_string());
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &where_clause, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &where_clause, &[], &test_log()).unwrap();
 
         // Only active rows: 2 in each source
         assert_eq!(result.total_rows_a, 2);
@@ -1265,7 +1275,7 @@ mod tests {
         ].into_iter().collect();
         let no_col_tol = HashMap::new();
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &None, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &None, &[], &test_log()).unwrap();
 
         assert_eq!(result.total_rows_a, 2);
         assert_eq!(result.total_rows_b, 2);
@@ -1298,7 +1308,7 @@ mod tests {
         let no_col_tol = HashMap::new();
         let where_clause = Some("status = 'active'".to_string());
 
-        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &where_clause, &test_log()).unwrap();
+        let result = run_diff(&conn, &["id".to_string()], &cols, &col_types, None, &no_col_tol, &where_clause, &[], &test_log()).unwrap();
 
         assert_eq!(result.total_rows_a, 2);
         assert_eq!(result.total_rows_b, 2);
@@ -1334,7 +1344,7 @@ mod tests {
         let no_col_tol = HashMap::new();
 
         let result =
-            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &test_log()).unwrap();
+            run_diff(&conn, &["id".to_string()], &cols, &col_types, Some(0), &no_col_tol, &None, &[], &test_log()).unwrap();
 
         // Row has a real diff (status), so it's "diffs", not "minor"
         assert_eq!(result.values_summary.rows_with_diffs, 1);

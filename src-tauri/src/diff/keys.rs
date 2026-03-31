@@ -226,7 +226,7 @@ mod tests {
             "status".into(),
             "created_at".into(),
         ];
-        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(), &None, &log).unwrap();
+        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(), &None, &[], &log).unwrap();
         conn
     }
 
