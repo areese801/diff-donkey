@@ -17,6 +17,9 @@ pub enum DiffDonkeyError {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    #[error("Snowflake error: {0}")]
+    Snowflake(String),
 }
 
 /// Tauri commands need to return `Result<T, String>` for the frontend.
@@ -49,6 +52,20 @@ impl From<DiffDonkeyError> for String {
             }
             // Validation errors are user-facing by design — safe to pass through
             DiffDonkeyError::Validation(msg) => msg.clone(),
+            // Snowflake errors may contain tokens or credentials — sanitize
+            DiffDonkeyError::Snowflake(msg) => {
+                eprintln!("Snowflake error: {}", msg);
+                if msg.contains("MFA") || msg.contains("key-pair") {
+                    msg.clone()
+                } else if msg.contains("authentication") || msg.contains("401") {
+                    "Snowflake authentication failed. Check your credentials.".to_string()
+                } else if msg.contains("timeout") || msg.contains("timed out") {
+                    "Snowflake query timed out. Try a simpler query or increase timeout."
+                        .to_string()
+                } else {
+                    "A Snowflake error occurred. Check the console for details.".to_string()
+                }
+            }
         }
     }
 }

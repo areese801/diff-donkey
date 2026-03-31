@@ -96,7 +96,7 @@ pub fn load_from_database(
 }
 
 /// Query table metadata — row count and column info.
-fn get_table_meta(conn: &Connection, table_name: &str) -> Result<TableMeta, DiffDonkeyError> {
+pub fn get_table_meta(conn: &Connection, table_name: &str) -> Result<TableMeta, DiffDonkeyError> {
     let row_count: usize = conn.query_row(
         &format!("SELECT COUNT(*) FROM {}", table_name),
         [],

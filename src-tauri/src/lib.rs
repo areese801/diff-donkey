@@ -6,6 +6,7 @@ mod db_loader;
 mod diff;
 mod error;
 mod loader;
+pub mod snowflake;
 mod types;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +30,7 @@ pub fn run() {
             commands::delete_connection,
             commands::test_connection,
             commands::load_from_saved_connection,
+            commands::load_snowflake_source,
             commands::get_activity_log,
             commands::clear_activity_log,
         ])

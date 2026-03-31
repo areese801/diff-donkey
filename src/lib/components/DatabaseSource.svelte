@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { loadDatabaseSource, loadFromSavedConnection } from "$lib/tauri";
+  import { loadDatabaseSource, loadFromSavedConnection, loadSnowflakeSource } from "$lib/tauri";
   import { savedConnections, loadConnections } from "$lib/stores/connections";
+  import { open } from "@tauri-apps/plugin-dialog";
   import ConnectionForm from "$lib/components/ConnectionForm.svelte";
   import type { TableMeta, DatabaseType } from "$lib/types/diff";
   import type { SavedConnection } from "$lib/types/connections";
@@ -20,6 +21,18 @@
   let manualMode = $state(false);
   let dbType: DatabaseType = $state("postgres");
   let connString = $state("");
+
+  // Snowflake manual mode fields
+  let sfAccountUrl = $state("");
+  let sfUsername = $state("");
+  let sfAuthMethod = $state<"password" | "keypair">("password");
+  let sfPassword = $state("");
+  let sfPrivateKeyPath = $state("");
+  let sfPrivateKeyFilename = $state("");
+  let sfWarehouse = $state("");
+  let sfRole = $state("");
+  let sfDatabase = $state("");
+  let sfSchema = $state("");
 
   // Shared
   let query = $state("");
@@ -45,6 +58,26 @@
       if (selectedConnectionId) {
         // Load from saved connection
         meta = await loadFromSavedConnection(selectedConnectionId, query, label);
+      } else if (manualMode && dbType === "snowflake") {
+        // Load from manual Snowflake fields
+        if (!sfAccountUrl.trim() || !sfUsername.trim()) {
+          error = "Account URL and username are required for Snowflake.";
+          loading = false;
+          return;
+        }
+        meta = await loadSnowflakeSource(
+          sfAccountUrl.trim(),
+          sfUsername.trim(),
+          sfAuthMethod,
+          sfAuthMethod === "password" ? sfPassword : null,
+          sfAuthMethod === "keypair" ? sfPrivateKeyPath : null,
+          sfWarehouse.trim() || null,
+          sfRole.trim() || null,
+          sfDatabase.trim() || null,
+          sfSchema.trim() || null,
+          query,
+          label,
+        );
       } else if (manualMode && connString.trim()) {
         // Load from manual connection string
         meta = await loadDatabaseSource(connString, query, label, dbType);
@@ -69,6 +102,17 @@
 
   function selectedConnection(): SavedConnection | undefined {
     return $savedConnections.find((c) => c.id === selectedConnectionId);
+  }
+
+  async function handleSelectKeyFile() {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Private Key", extensions: ["p8", "pem"] }],
+    });
+    if (selected) {
+      sfPrivateKeyPath = selected as string;
+      sfPrivateKeyFilename = sfPrivateKeyPath.split(/[/\\]/).pop() ?? "";
+    }
   }
 </script>
 
@@ -101,8 +145,13 @@
             <span class="color-dot" style="background: {conn.color}"></span>
           {/if}
           <span class="conn-summary-text">
-            {conn.host ?? ""}
-            {#if conn.database} / {conn.database}{/if}
+            {#if conn.db_type === "snowflake"}
+              {conn.account_url ?? ""}
+              {#if conn.warehouse} / {conn.warehouse}{/if}
+            {:else}
+              {conn.host ?? ""}
+              {#if conn.database} / {conn.database}{/if}
+            {/if}
           </span>
         </div>
       {/if}
@@ -125,20 +174,77 @@
         <select id="db-type-{label}" bind:value={dbType}>
           <option value="postgres">PostgreSQL</option>
           <option value="mysql">MySQL</option>
+          <option value="snowflake">Snowflake</option>
         </select>
       </div>
 
-      <div class="field">
-        <label for="conn-{label}">Connection String</label>
-        <input
-          id="conn-{label}"
-          type="password"
-          bind:value={connString}
-          placeholder={dbType === "postgres"
-            ? "host=localhost port=5432 dbname=mydb user=me password=secret"
-            : "host=localhost port=3306 user=me password=secret database=mydb"}
-        />
-      </div>
+      {#if dbType === "snowflake"}
+        <div class="field">
+          <label for="sf-account-{label}">Account URL</label>
+          <input id="sf-account-{label}" type="text" bind:value={sfAccountUrl} placeholder="https://myorg-myaccount.snowflakecomputing.com" />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="sf-auth-{label}">Auth Method</label>
+            <select id="sf-auth-{label}" bind:value={sfAuthMethod}>
+              <option value="password">Password</option>
+              <option value="keypair">Key Pair</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="sf-user-{label}">Username</label>
+            <input id="sf-user-{label}" type="text" bind:value={sfUsername} placeholder="MYUSER" />
+          </div>
+        </div>
+        {#if sfAuthMethod === "password"}
+          <div class="field">
+            <label for="sf-pass-{label}">Password</label>
+            <input id="sf-pass-{label}" type="password" bind:value={sfPassword} placeholder="Enter password" />
+          </div>
+        {:else}
+          <div class="field">
+            <label for="sf-keyfile-{label}">Private Key (.p8 / .pem)</label>
+            <div class="key-file-row">
+              <button id="sf-keyfile-{label}" type="button" class="btn-small" onclick={handleSelectKeyFile}>Select Key File</button>
+              {#if sfPrivateKeyFilename}
+                <span class="key-filename">{sfPrivateKeyFilename}</span>
+              {/if}
+            </div>
+          </div>
+        {/if}
+        <div class="field-row">
+          <div class="field">
+            <label for="sf-wh-{label}">Warehouse</label>
+            <input id="sf-wh-{label}" type="text" bind:value={sfWarehouse} placeholder="COMPUTE_WH" />
+          </div>
+          <div class="field">
+            <label for="sf-role-{label}">Role</label>
+            <input id="sf-role-{label}" type="text" bind:value={sfRole} placeholder="SYSADMIN" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="sf-db-{label}">Database</label>
+            <input id="sf-db-{label}" type="text" bind:value={sfDatabase} placeholder="MY_DB" />
+          </div>
+          <div class="field">
+            <label for="sf-schema-{label}">Schema</label>
+            <input id="sf-schema-{label}" type="text" bind:value={sfSchema} placeholder="PUBLIC" />
+          </div>
+        </div>
+      {:else}
+        <div class="field">
+          <label for="conn-{label}">Connection String</label>
+          <input
+            id="conn-{label}"
+            type="password"
+            bind:value={connString}
+            placeholder={dbType === "postgres"
+              ? "host=localhost port=5432 dbname=mydb user=me password=secret"
+              : "host=localhost port=3306 user=me password=secret database=mydb"}
+          />
+        </div>
+      {/if}
     {/if}
 
     <div class="field">
@@ -255,6 +361,26 @@
 
   .divider-toggle:hover {
     color: #396cd8;
+  }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .key-file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .key-filename {
+    font-size: 0.85em;
+    color: #888;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   select, input, textarea {

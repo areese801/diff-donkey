@@ -19,6 +19,7 @@ use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
+use crate::snowflake;
 use crate::types::{
     ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
 };
@@ -505,6 +506,83 @@ pub fn get_diff_rows(
     })
 }
 
+/// Load data from Snowflake into DuckDB as source_a or source_b.
+///
+/// Uses the Snowflake REST API (not DuckDB extensions) to authenticate,
+/// execute a query, and load results into a local DuckDB table.
+#[tauri::command]
+pub async fn load_snowflake_source(
+    account_url: String,
+    username: String,
+    auth_method: String,
+    password: Option<String>,
+    private_key_path: Option<String>,
+    warehouse: Option<String>,
+    role: Option<String>,
+    database: Option<String>,
+    schema: Option<String>,
+    query: String,
+    label: String,
+    state: State<'_, DuckDbState>,
+    log: State<'_, ActivityLog>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label is exactly "a" or "b"
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+
+    let config = snowflake::SnowflakeConfig {
+        account_url,
+        warehouse,
+        role,
+        database,
+        schema,
+    };
+
+    let auth = match auth_method.as_str() {
+        "keypair" => {
+            let key_path = private_key_path
+                .ok_or("Private key path is required for key-pair authentication")?;
+            let pem = std::fs::read_to_string(&key_path).map_err(|e| {
+                eprintln!("Failed to read private key: {}", e);
+                "Failed to read private key file. Check the file path and permissions.".to_string()
+            })?;
+            snowflake::SnowflakeAuth::KeyPair {
+                username,
+                private_key_pem: pem,
+            }
+        }
+        _ => snowflake::SnowflakeAuth::Password {
+            username,
+            password: password.unwrap_or_default(),
+        },
+    };
+
+    // Phase 1: HTTP — authenticate and fetch results (no DuckDB lock held)
+    let result = snowflake::fetch_snowflake(config, auth, &query)
+        .await
+        .map_err(|e: DiffDonkeyError| {
+            let msg = e.to_string();
+            eprintln!("Snowflake fetch error: {}", msg);
+            if msg.contains("authentication") || msg.contains("401") || msg.contains("token") {
+                "Snowflake authentication failed. Check your credentials.".to_string()
+            } else {
+                e.into()
+            }
+        })?;
+
+    // Phase 2: DuckDB — lock and load results into local table
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
+        .map_err(|e: DiffDonkeyError| e.into())
+}
+
 // ─── Connection Management Commands ─────────────────────────────────────────
 
 /// List all saved database connections.
@@ -566,14 +644,15 @@ pub fn test_connection(
 ///
 /// Retrieves the password from the OS keychain, builds the connection string,
 /// and delegates to the existing db_loader infrastructure.
+/// For Snowflake connections, uses the REST API client instead.
 #[tauri::command]
-pub fn load_from_saved_connection(
+pub async fn load_from_saved_connection(
     id: String,
     query: String,
     label: String,
     app_handle: tauri::AppHandle,
-    state: State<DuckDbState>,
-    log: State<ActivityLog>,
+    state: State<'_, DuckDbState>,
+    log: State<'_, ActivityLog>,
 ) -> Result<TableMeta, String> {
     // SECURITY: Validate label
     if label != "a" && label != "b" {
@@ -596,7 +675,51 @@ pub fn load_from_saved_connection(
         "Failed to retrieve stored password. You may need to re-enter it.".to_string()
     })?;
 
-    // Build connection string
+    // Snowflake uses its own REST API — not DuckDB extensions
+    if saved.db_type == "snowflake" {
+        let account_url = saved.account_url.as_deref().ok_or(
+            "Account URL is required for Snowflake connections",
+        )?;
+        let username = saved.username.as_deref().ok_or(
+            "Username is required for Snowflake connections",
+        )?;
+
+        let sf_config = snowflake::SnowflakeConfig {
+            account_url: account_url.to_string(),
+            warehouse: saved.warehouse.clone(),
+            role: saved.role.clone(),
+            database: saved.database.clone(),
+            schema: saved.schema.clone(),
+        };
+
+        let sf_auth =
+            connections::build_snowflake_auth(saved, username, password.as_deref())
+                .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+        // Phase 1: HTTP — fetch results without holding DuckDB lock
+        let result = snowflake::fetch_snowflake(sf_config, sf_auth, &query)
+            .await
+            .map_err(|e: DiffDonkeyError| {
+                let msg = e.to_string();
+                eprintln!("Snowflake fetch error: {}", msg);
+                if msg.contains("authentication") || msg.contains("401") {
+                    "Snowflake authentication failed. Check your credentials.".to_string()
+                } else {
+                    e.into()
+                }
+            })?;
+
+        // Phase 2: DuckDB — lock and load
+        let conn = state
+            .conn
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+
+        return snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
+            .map_err(|e: DiffDonkeyError| e.into());
+    }
+
+    // Build connection string for postgres/mysql
     let conn_string = connections::build_connection_string(saved, password.as_deref());
     if conn_string.trim().is_empty() {
         return Err("Could not build connection string — check connection settings.".to_string());

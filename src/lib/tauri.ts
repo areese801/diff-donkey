@@ -70,6 +70,35 @@ export async function getDiffRows(
   });
 }
 
+/** Load data from Snowflake into DuckDB as source_a or source_b */
+export async function loadSnowflakeSource(
+  accountUrl: string,
+  username: string,
+  authMethod: "password" | "keypair",
+  password: string | null,
+  privateKeyPath: string | null,
+  warehouse: string | null,
+  role: string | null,
+  database: string | null,
+  schema: string | null,
+  query: string,
+  label: "a" | "b"
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_snowflake_source", {
+    accountUrl,
+    username,
+    authMethod,
+    password,
+    privateKeyPath,
+    warehouse,
+    role,
+    database,
+    schema,
+    query,
+    label,
+  });
+}
+
 // ─── Connection Management ──────────────────────────────────────────────────
 
 /** List all saved database connections */

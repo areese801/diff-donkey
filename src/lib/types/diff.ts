@@ -92,7 +92,7 @@ export interface DiffConfig {
 }
 
 /** Supported database types for remote loading */
-export type DatabaseType = "postgres" | "mysql";
+export type DatabaseType = "postgres" | "mysql" | "snowflake";
 
 /** Paginated row data returned from backend */
 export interface PagedRows {
