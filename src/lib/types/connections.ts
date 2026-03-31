@@ -14,10 +14,12 @@ export interface SavedConnection {
   schema: string | null;
   ssl: boolean;
   color: string | null;
-  // Snowflake-specific (Phase 2)
+  // Snowflake-specific
   account_url: string | null;
   warehouse: string | null;
   role: string | null;
+  auth_method: string | null;        // "password" | "keypair"
+  private_key_path: string | null;   // Path to .p8/.pem file
   // SSH tunnel (Phase 3)
   ssh_enabled: boolean;
   ssh_host: string | null;

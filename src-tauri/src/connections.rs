@@ -32,10 +32,12 @@ pub struct SavedConnection {
     pub schema: Option<String>,
     pub ssl: bool,
     pub color: Option<String>,
-    // Snowflake-specific (placeholder for Phase 2)
+    // Snowflake-specific
     pub account_url: Option<String>,
     pub warehouse: Option<String>,
     pub role: Option<String>,
+    pub auth_method: Option<String>,        // "password" | "keypair"
+    pub private_key_path: Option<String>,   // Path to .p8/.pem file
     // SSH tunnel (placeholder for Phase 3)
     pub ssh_enabled: bool,
     pub ssh_host: Option<String>,
@@ -178,6 +180,34 @@ pub fn validate_connection(conn: &SavedConnection) -> Result<(), DiffDonkeyError
             valid_types.join(", ")
         )));
     }
+
+    // Snowflake-specific validation
+    if conn.db_type == "snowflake" {
+        if conn.account_url.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(DiffDonkeyError::Validation(
+                "Account URL is required for Snowflake connections".to_string(),
+            ));
+        }
+        if conn.username.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(DiffDonkeyError::Validation(
+                "Username is required for Snowflake connections".to_string(),
+            ));
+        }
+        if conn.auth_method.as_deref() == Some("keypair") {
+            if conn
+                .private_key_path
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
+                return Err(DiffDonkeyError::Validation(
+                    "Private key path is required for key-pair authentication".to_string(),
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -266,11 +296,17 @@ fn build_mysql_connection_string(conn: &SavedConnection, password: Option<&str>)
 ///
 /// Uses the same DuckDB extension mechanism as `db_loader::load_from_database`,
 /// but only runs `SELECT 1` to verify connectivity without loading data.
+/// For Snowflake, uses the REST API client instead.
 pub fn test_connection(
     duck_conn: &duckdb::Connection,
     conn: &SavedConnection,
     password: Option<&str>,
 ) -> Result<String, DiffDonkeyError> {
+    // Snowflake uses its own REST API — not DuckDB extensions
+    if conn.db_type == "snowflake" {
+        return test_snowflake_connection(conn, password);
+    }
+
     let conn_string = build_connection_string(conn, password);
 
     if conn_string.trim().is_empty() {
@@ -306,6 +342,98 @@ pub fn test_connection(
     Ok("Connection successful".to_string())
 }
 
+/// Test a Snowflake connection by authenticating and running SELECT 1.
+fn test_snowflake_connection(
+    conn: &SavedConnection,
+    password: Option<&str>,
+) -> Result<String, DiffDonkeyError> {
+    let account_url = conn
+        .account_url
+        .as_deref()
+        .ok_or_else(|| DiffDonkeyError::Validation("Account URL is required".to_string()))?;
+
+    let username = conn
+        .username
+        .as_deref()
+        .ok_or_else(|| DiffDonkeyError::Validation("Username is required".to_string()))?;
+
+    let config = crate::snowflake::SnowflakeConfig {
+        account_url: account_url.to_string(),
+        warehouse: conn.warehouse.clone(),
+        role: conn.role.clone(),
+        database: conn.database.clone(),
+        schema: conn.schema.clone(),
+    };
+
+    let auth = build_snowflake_auth(conn, username, password)?;
+
+    // Run async code from sync context using tokio runtime
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| DiffDonkeyError::Snowflake(format!("Failed to create runtime: {}", e)))?;
+
+    rt.block_on(async {
+        let client_config = crate::snowflake::SnowflakeConfig {
+            account_url: config.account_url,
+            warehouse: config.warehouse,
+            role: config.role,
+            database: config.database,
+            schema: config.schema,
+        };
+        // Just authenticate and run SELECT 1 — we don't need to load results
+        let duck_conn = duckdb::Connection::open_in_memory()
+            .map_err(|e| DiffDonkeyError::DuckDb(e))?;
+        let log = crate::activity::ActivityLog::new();
+        crate::snowflake::load_snowflake(
+            client_config,
+            auth,
+            "SELECT 1 AS test",
+            &duck_conn,
+            "_snowflake_test",
+            &log,
+        )
+        .await?;
+        Ok("Connection successful".to_string())
+    })
+}
+
+/// Build a SnowflakeAuth from a SavedConnection.
+pub fn build_snowflake_auth(
+    conn: &SavedConnection,
+    username: &str,
+    password: Option<&str>,
+) -> Result<crate::snowflake::SnowflakeAuth, DiffDonkeyError> {
+    match conn.auth_method.as_deref() {
+        Some("keypair") => {
+            let key_path = conn
+                .private_key_path
+                .as_deref()
+                .ok_or_else(|| {
+                    DiffDonkeyError::Validation("Private key path is required".to_string())
+                })?;
+
+            let private_key_pem = std::fs::read_to_string(key_path).map_err(|e| {
+                DiffDonkeyError::Snowflake(format!(
+                    "Failed to read private key file '{}': {}",
+                    key_path, e
+                ))
+            })?;
+
+            Ok(crate::snowflake::SnowflakeAuth::KeyPair {
+                username: username.to_string(),
+                private_key_pem,
+            })
+        }
+        _ => {
+            // Default to password auth
+            let pw = password.unwrap_or("").to_string();
+            Ok(crate::snowflake::SnowflakeAuth::Password {
+                username: username.to_string(),
+                password: pw,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +454,8 @@ mod tests {
             account_url: None,
             warehouse: None,
             role: None,
+            auth_method: None,
+            private_key_path: None,
             ssh_enabled: false,
             ssh_host: None,
             ssh_port: None,
@@ -440,7 +570,10 @@ mod tests {
     #[test]
     fn test_validate_connection_valid_types() {
         for db_type in &["postgres", "mysql", "snowflake"] {
-            let conn = test_conn(db_type);
+            let mut conn = test_conn(db_type);
+            if *db_type == "snowflake" {
+                conn.account_url = Some("https://myorg-myaccount.snowflakecomputing.com".to_string());
+            }
             assert!(
                 validate_connection(&conn).is_ok(),
                 "Failed for type: {}",
@@ -506,5 +639,65 @@ mod tests {
         let conn = test_conn("sqlite");
         let result = build_connection_string(&conn, Some("pw"));
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_validate_snowflake_missing_account_url() {
+        let mut conn = test_conn("snowflake");
+        conn.account_url = None;
+        conn.username = Some("user".to_string());
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Account URL is required"));
+    }
+
+    #[test]
+    fn test_validate_snowflake_missing_username() {
+        let mut conn = test_conn("snowflake");
+        conn.account_url = Some("https://org-acct.snowflakecomputing.com".to_string());
+        conn.username = None;
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Username is required"));
+    }
+
+    #[test]
+    fn test_validate_snowflake_keypair_missing_key_path() {
+        let mut conn = test_conn("snowflake");
+        conn.account_url = Some("https://org-acct.snowflakecomputing.com".to_string());
+        conn.username = Some("user".to_string());
+        conn.auth_method = Some("keypair".to_string());
+        conn.private_key_path = None;
+        let result = validate_connection(&conn);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Private key path is required"));
+    }
+
+    #[test]
+    fn test_validate_snowflake_valid_password_auth() {
+        let mut conn = test_conn("snowflake");
+        conn.account_url = Some("https://org-acct.snowflakecomputing.com".to_string());
+        conn.username = Some("user".to_string());
+        conn.auth_method = Some("password".to_string());
+        assert!(validate_connection(&conn).is_ok());
+    }
+
+    #[test]
+    fn test_validate_snowflake_valid_keypair_auth() {
+        let mut conn = test_conn("snowflake");
+        conn.account_url = Some("https://org-acct.snowflakecomputing.com".to_string());
+        conn.username = Some("user".to_string());
+        conn.auth_method = Some("keypair".to_string());
+        conn.private_key_path = Some("/path/to/key.p8".to_string());
+        assert!(validate_connection(&conn).is_ok());
     }
 }
