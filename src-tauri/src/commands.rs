@@ -583,6 +583,213 @@ pub async fn load_snowflake_source(
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
+// ─── Export Commands ────────────────────────────────────────────────────────
+
+/// Export diff rows to a file (CSV, Parquet, or JSON) using DuckDB's COPY TO.
+///
+/// Reuses the same WHERE clause logic as get_diff_rows so the export
+/// respects the current row_filter and column_filter selections.
+#[tauri::command]
+pub fn export_diff_rows(
+    filepath: String,
+    format: String,
+    column_filter: Option<String>,
+    row_filter: Option<String>,
+    state: State<DuckDbState>,
+    log: State<ActivityLog>,
+) -> Result<i64, String> {
+    // Validate format
+    if !["csv", "parquet", "json"].contains(&format.as_str()) {
+        return Err(format!(
+            "Invalid export format: '{}'. Must be csv, parquet, or json.",
+            format
+        ));
+    }
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    // SECURITY: Validate row_filter against known values
+    if let Some(ref rf) = row_filter {
+        if !["all", "diffs", "minor", "same"].contains(&rf.as_str()) {
+            return Err(format!("Invalid row filter: '{}'", rf));
+        }
+    }
+
+    // Get is_diff_* columns
+    let mut stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'is_diff_%' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let compare_cols: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    // Get is_raw_diff_* columns
+    let mut raw_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'is_raw_diff_%' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let raw_diff_cols: Vec<String> = raw_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    // Validate column_filter
+    if let Some(ref col) = column_filter {
+        let expected_is_diff = format!("is_diff_{}", col);
+        if !compare_cols.contains(&expected_is_diff) {
+            return Err(format!("Invalid column filter: '{}'", col));
+        }
+    }
+
+    // Build PK NOT NULL check
+    let mut pk_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' AND column_name LIKE 'pk_%_a' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let pk_a_cols: Vec<String> = pk_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let pk_not_null = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\" IS NOT NULL", c))
+        .chain(
+            pk_a_cols
+                .iter()
+                .map(|c| format!("\"{}\" IS NOT NULL", c.replace("_a", "_b"))),
+        )
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    // Build WHERE clause (same logic as get_diff_rows)
+    let where_clause = match row_filter.as_deref() {
+        Some("all") => pk_not_null.clone(),
+        Some("minor") => {
+            let no_diffs = compare_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let any_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 1", c))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+
+            if let Some(ref col) = column_filter {
+                let is_diff_col = format!("is_diff_{}", col);
+                let is_raw_diff_col = format!("is_raw_diff_{}", col);
+                format!(
+                    "{} AND \"{}\" = 0 AND \"{}\" = 1",
+                    pk_not_null, is_diff_col, is_raw_diff_col
+                )
+            } else {
+                format!("{} AND ({}) AND ({})", pk_not_null, no_diffs, any_raw)
+            }
+        }
+        Some("same") => {
+            let no_raw = raw_diff_cols
+                .iter()
+                .map(|c| format!("\"{}\" = 0", c))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("{} AND ({})", pk_not_null, no_raw)
+        }
+        _ => {
+            // Default: "diffs"
+            let diff_filter = if let Some(ref col) = column_filter {
+                format!("\"is_diff_{}\" = 1", col)
+            } else {
+                compare_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 1", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ")
+            };
+            format!("{} AND ({})", pk_not_null, diff_filter)
+        }
+    };
+
+    // Build SELECT columns — exclude is_diff_* and is_raw_diff_* metadata
+    let mut col_stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_name = '_diff_join' \
+             AND column_name NOT LIKE 'is_diff_%' \
+             AND column_name NOT LIKE 'is_raw_diff_%' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let columns: Vec<String> = col_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let select_cols = columns
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let order_by = pk_a_cols
+        .iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // SECURITY: Escape filepath (double single quotes)
+    let escaped_path = filepath.replace('\'', "''");
+
+    // Build format options — HEADER only applies to CSV
+    let format_options = match format.as_str() {
+        "csv" => "FORMAT CSV, HEADER true".to_string(),
+        "parquet" => "FORMAT PARQUET".to_string(),
+        "json" => "FORMAT JSON".to_string(),
+        _ => unreachable!(),
+    };
+
+    let copy_sql = format!(
+        "COPY (SELECT {} FROM _diff_join WHERE {} ORDER BY {}) TO '{}' ({})",
+        select_cols, where_clause, order_by, escaped_path, format_options
+    );
+
+    activity::execute_logged(&conn, &copy_sql, "export_diff_rows", &log)
+        .map_err(|e| e.to_string())?;
+
+    // Count exported rows
+    let count_sql = format!("SELECT COUNT(*) FROM _diff_join WHERE {}", where_clause);
+    let count: i64 =
+        activity::query_row_logged(&conn, &count_sql, "export_diff_rows_count", &log, |row| {
+            row.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(count)
+}
+
 // ─── Connection Management Commands ─────────────────────────────────────────
 
 /// List all saved database connections.
@@ -811,4 +1018,301 @@ pub fn get_activity_log(log: State<ActivityLog>) -> Vec<activity::QueryLogEntry>
 #[tauri::command]
 pub fn clear_activity_log(log: State<ActivityLog>) {
     log.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::activity::ActivityLog;
+    use crate::diff;
+    use crate::loader;
+    use duckdb::Connection;
+    use std::collections::HashMap;
+
+    fn test_log() -> ActivityLog {
+        ActivityLog::new()
+    }
+
+    /// Set up a DuckDB connection with test data loaded and diff already run,
+    /// so _diff_join and _diff_meta tables exist for export tests.
+    fn setup_diff_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        let log = test_log();
+        loader::load_csv(&conn, "../test-data/orders_a.csv", "source_a", &log).unwrap();
+        loader::load_csv(&conn, "../test-data/orders_b.csv", "source_b", &log).unwrap();
+
+        let pk_columns = vec!["id".to_string()];
+        let compare_cols = vec![
+            "customer_name".to_string(),
+            "amount".to_string(),
+            "status".to_string(),
+            "created_at".to_string(),
+        ];
+        let column_types: HashMap<String, String> = [
+            ("customer_name", "VARCHAR"),
+            ("amount", "DOUBLE"),
+            ("status", "VARCHAR"),
+            ("created_at", "DATE"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        // Store PK metadata
+        let pk_json = serde_json::to_string(&pk_columns).unwrap();
+        conn.execute(
+            "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_columns",
+            [&pk_json],
+        )
+        .unwrap();
+
+        let no_col_tol = HashMap::new();
+        diff::stats::run_diff(
+            &conn,
+            &pk_columns,
+            &compare_cols,
+            &column_types,
+            None,
+            &no_col_tol,
+            &None,
+            &[],
+            &log,
+        )
+        .unwrap();
+
+        conn
+    }
+
+    /// Helper: run export_diff_rows logic directly against a connection
+    /// (bypasses Tauri State wrapper, tests the SQL logic).
+    fn run_export(
+        conn: &Connection,
+        filepath: &str,
+        format: &str,
+        column_filter: Option<&str>,
+        row_filter: Option<&str>,
+    ) -> Result<i64, String> {
+        let log = test_log();
+
+        // Validate format
+        if !["csv", "parquet", "json"].contains(&format) {
+            return Err(format!(
+                "Invalid export format: '{}'. Must be csv, parquet, or json.",
+                format
+            ));
+        }
+
+        if let Some(rf) = row_filter {
+            if !["all", "diffs", "minor", "same"].contains(&rf) {
+                return Err(format!("Invalid row filter: '{}'", rf));
+            }
+        }
+
+        // Get is_diff_* columns
+        let mut stmt = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = '_diff_join' AND column_name LIKE 'is_diff_%' \
+                 ORDER BY ordinal_position",
+            )
+            .map_err(|e| e.to_string())?;
+        let compare_cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let mut raw_stmt = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = '_diff_join' AND column_name LIKE 'is_raw_diff_%' \
+                 ORDER BY ordinal_position",
+            )
+            .map_err(|e| e.to_string())?;
+        let raw_diff_cols: Vec<String> = raw_stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let mut pk_stmt = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = '_diff_join' AND column_name LIKE 'pk_%_a' \
+                 ORDER BY ordinal_position",
+            )
+            .map_err(|e| e.to_string())?;
+        let pk_a_cols: Vec<String> = pk_stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let pk_not_null = pk_a_cols
+            .iter()
+            .map(|c| format!("\"{}\" IS NOT NULL", c))
+            .chain(
+                pk_a_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" IS NOT NULL", c.replace("_a", "_b"))),
+            )
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let where_clause = match row_filter {
+            Some("all") => pk_not_null.clone(),
+            Some("diffs") | None => {
+                let diff_filter = if let Some(col) = column_filter {
+                    format!("\"is_diff_{}\" = 1", col)
+                } else {
+                    compare_cols
+                        .iter()
+                        .map(|c| format!("\"{}\" = 1", c))
+                        .collect::<Vec<_>>()
+                        .join(" OR ")
+                };
+                format!("{} AND ({})", pk_not_null, diff_filter)
+            }
+            Some("minor") => {
+                let no_diffs = compare_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 0", c))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                let any_raw = raw_diff_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 1", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                format!("{} AND ({}) AND ({})", pk_not_null, no_diffs, any_raw)
+            }
+            Some("same") => {
+                let no_raw = raw_diff_cols
+                    .iter()
+                    .map(|c| format!("\"{}\" = 0", c))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                format!("{} AND ({})", pk_not_null, no_raw)
+            }
+            _ => unreachable!(),
+        };
+
+        let mut col_stmt = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = '_diff_join' \
+                 AND column_name NOT LIKE 'is_diff_%' \
+                 AND column_name NOT LIKE 'is_raw_diff_%' \
+                 ORDER BY ordinal_position",
+            )
+            .map_err(|e| e.to_string())?;
+        let columns: Vec<String> = col_stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let select_cols = columns
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let order_by = pk_a_cols
+            .iter()
+            .map(|c| format!("\"{}\"", c))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let escaped_path = filepath.replace('\'', "''");
+        let format_options = match format {
+            "csv" => "FORMAT CSV, HEADER true",
+            "parquet" => "FORMAT PARQUET",
+            "json" => "FORMAT JSON",
+            _ => unreachable!(),
+        };
+
+        let copy_sql = format!(
+            "COPY (SELECT {} FROM _diff_join WHERE {} ORDER BY {}) TO '{}' ({})",
+            select_cols, where_clause, order_by, escaped_path, format_options
+        );
+
+        crate::activity::execute_logged(conn, &copy_sql, "export_diff_rows", &log)
+            .map_err(|e| e.to_string())?;
+
+        let count_sql = format!("SELECT COUNT(*) FROM _diff_join WHERE {}", where_clause);
+        let count: i64 = conn
+            .query_row(&count_sql, [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+
+        Ok(count)
+    }
+
+    #[test]
+    fn test_export_csv() {
+        let conn = setup_diff_conn();
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_export.csv");
+        let path_str = path.to_str().unwrap();
+
+        let count = run_export(&conn, path_str, "csv", None, Some("all")).unwrap();
+        assert!(count > 0, "Should export at least one row");
+        assert!(path.exists(), "CSV file should exist");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(","), "CSV should contain commas");
+        // Header line + data lines
+        let lines: Vec<&str> = content.trim().lines().collect();
+        assert_eq!(lines.len() as i64, count + 1, "Lines should be header + row count");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_parquet() {
+        let conn = setup_diff_conn();
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_export.parquet");
+        let path_str = path.to_str().unwrap();
+
+        let count = run_export(&conn, path_str, "parquet", None, Some("all")).unwrap();
+        assert!(count > 0, "Should export at least one row");
+        assert!(path.exists(), "Parquet file should exist");
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(metadata.len() > 0, "Parquet file should have content");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_invalid_format() {
+        let result = run_export(
+            &Connection::open_in_memory().unwrap(),
+            "/tmp/test.xlsx",
+            "xlsx",
+            None,
+            Some("all"),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid export format"));
+    }
+
+    #[test]
+    fn test_export_with_row_filter() {
+        let conn = setup_diff_conn();
+        let dir = std::env::temp_dir();
+
+        // Export all rows
+        let path_all = dir.join("test_export_all.csv");
+        let count_all = run_export(&conn, path_all.to_str().unwrap(), "csv", None, Some("all")).unwrap();
+
+        // Export only diffs
+        let path_diffs = dir.join("test_export_diffs.csv");
+        let count_diffs =
+            run_export(&conn, path_diffs.to_str().unwrap(), "csv", None, Some("diffs")).unwrap();
+
+        // Diffs should be a subset of all
+        assert!(count_diffs <= count_all, "Diff rows should be <= all rows");
+        assert!(count_diffs > 0, "Should have some diff rows in test data");
+
+        std::fs::remove_file(&path_all).ok();
+        std::fs::remove_file(&path_diffs).ok();
+    }
 }

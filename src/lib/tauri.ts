@@ -99,6 +99,23 @@ export async function loadSnowflakeSource(
   });
 }
 
+// ─── Export ─────────────────────────────────────────────────────────────────
+
+/** Export diff rows to a file (CSV, Parquet, or JSON) */
+export async function exportDiffRows(
+  filepath: string,
+  format: "csv" | "parquet" | "json",
+  columnFilter?: string,
+  rowFilter?: string,
+): Promise<number> {
+  return invoke<number>("export_diff_rows", {
+    filepath,
+    format,
+    columnFilter: columnFilter ?? null,
+    rowFilter: rowFilter ?? null,
+  });
+}
+
 // ─── Connection Management ──────────────────────────────────────────────────
 
 /** List all saved database connections */
