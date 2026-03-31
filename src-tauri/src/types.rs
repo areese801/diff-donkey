@@ -123,6 +123,8 @@ pub struct DiffConfig {
     pub pk_columns: Vec<String>,
     pub tolerance: Option<i32>,
     pub column_tolerances: Option<std::collections::HashMap<String, ColumnTolerance>>,
+    pub ignored_columns: Option<Vec<String>>,
+    pub where_clause: Option<String>,
 }
 
 /// Paginated row data — used for exclusive rows, duplicates, and diff rows.

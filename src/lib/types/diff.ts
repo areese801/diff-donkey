@@ -89,6 +89,8 @@ export interface DiffConfig {
   pk_columns: string[];
   tolerance: number | null;
   column_tolerances: Record<string, ColumnTolerance> | null;
+  ignored_columns?: string[];
+  where_clause?: string | null;
 }
 
 /** Supported database types for remote loading */

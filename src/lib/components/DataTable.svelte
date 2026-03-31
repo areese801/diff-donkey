@@ -34,6 +34,20 @@
     data?.columns.filter(c => !c.startsWith("is_diff_") && !c.startsWith("is_raw_diff_")) ?? []
   );
 
+  /** Set of base column names that are ignored (have values but no is_diff_* flags) */
+  let ignoredBaseColumns = $derived(() => {
+    if (!data) return new Set<string>();
+    const diffCols = new Set(data.columns.filter(c => c.startsWith("is_diff_")).map(c => c.replace("is_diff_", "")));
+    const ignored = new Set<string>();
+    for (const col of displayColumns) {
+      const base = col.replace(/_[ab]$/, '');
+      if ((col.endsWith("_a") || col.endsWith("_b")) && !diffCols.has(base)) {
+        ignored.add(base);
+      }
+    }
+    return ignored;
+  });
+
   /**
    * Compute character-level diff parts for a cell value.
    * Returns an array of { text, type } where type is "same", "removed", or "added".
@@ -88,7 +102,8 @@
       <thead>
         <tr>
           {#each displayColumns as col}
-            <th>{col}</th>
+            {@const baseCol = col.replace(/_[ab]$/, '')}
+            <th class:ignored-header={highlightDiffs && ignoredBaseColumns().has(baseCol)}>{col}</th>
           {/each}
         </tr>
       </thead>
@@ -99,10 +114,11 @@
               {@const baseCol = col.replace(/_[ab]$/, '')}
               {@const isDiffCol = `is_diff_${baseCol}`}
               {@const isRawDiffCol = `is_raw_diff_${baseCol}`}
+              {@const isIgnored = highlightDiffs && (col.endsWith("_a") || col.endsWith("_b")) && row[isDiffCol] === undefined && row[isRawDiffCol] === undefined}
               {@const hasDiff = highlightDiffs && row[isDiffCol] === 1}
               {@const hasMinorDiff = highlightDiffs && row[isDiffCol] !== 1 && row[isRawDiffCol] === 1}
-              {@const parts = highlightDiffs && charDiffs ? charDiffParts(row, col) : null}
-              <td class:diff-cell={hasDiff} class:minor-diff-cell={hasMinorDiff}>
+              {@const parts = highlightDiffs && charDiffs && !isIgnored ? charDiffParts(row, col) : null}
+              <td class:diff-cell={hasDiff} class:minor-diff-cell={hasMinorDiff} class:ignored-cell={isIgnored}>
                 {#if parts}
                   {#each parts as part}
                     {#if part.highlight}
@@ -196,6 +212,16 @@
     background: #fff8e1;
     color: #e67e22;
     font-weight: 500;
+  }
+
+  .ignored-cell {
+    opacity: 0.35;
+    text-decoration: line-through;
+  }
+
+  .ignored-header {
+    opacity: 0.35;
+    text-decoration: line-through;
   }
 
   .char-diff {

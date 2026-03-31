@@ -8,7 +8,7 @@
   import ValuesTab from "$lib/components/ValuesTab.svelte";
   import ActivityTab from "$lib/components/ActivityTab.svelte";
   import { sourceA, sourceB } from "$lib/stores/config";
-  import { diffResult, isLoading, pkColumn, diffPrecision } from "$lib/stores/diff";
+  import { diffResult, isLoading, pkColumn, diffPrecision, ignoredColumns as ignoredColumnsStore } from "$lib/stores/diff";
   import { getSchemaComparison, runDiff } from "$lib/tauri";
   import type { SchemaComparison } from "$lib/types/diff";
 
@@ -41,6 +41,8 @@
     selectedPks: string[],
     tolerance: number | null,
     columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
+    ignoredColumns: string[],
+    whereClause: string | null,
   ) {
     isLoading.set(true);
     diffError = null;
@@ -52,9 +54,12 @@
         pk_columns: selectedPks,
         tolerance,
         column_tolerances: columnTolerances,
+        ignored_columns: ignoredColumns.length > 0 ? ignoredColumns : undefined,
+        where_clause: whereClause,
       });
       diffResult.set(result);
       diffPrecision.set(tolerance);
+      ignoredColumnsStore.set(ignoredColumns);
       if (isFirstRun) activeTab = "overview";
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
@@ -85,7 +90,7 @@
       {/if}
 
       {#if activeTab === "overview"}
-        <OverviewTab result={$diffResult} />
+        <OverviewTab result={$diffResult} ignoredColumns={$ignoredColumnsStore} />
       {:else if activeTab === "columns"}
         <ColumnsTab comparison={schemaComparison} />
       {:else if activeTab === "primary-keys"}
