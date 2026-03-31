@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { loadDatabaseSource, loadFromSavedConnection, loadSnowflakeSource } from "$lib/tauri";
+  import { loadDatabaseSource, loadFromSavedConnection, loadSnowflakeSource, getQueryHistory, deleteQueryHistoryEntry, clearQueryHistory } from "$lib/tauri";
   import { savedConnections, loadConnections } from "$lib/stores/connections";
   import { open } from "@tauri-apps/plugin-dialog";
   import ConnectionForm from "$lib/components/ConnectionForm.svelte";
-  import type { TableMeta, DatabaseType } from "$lib/types/diff";
+  import type { TableMeta, DatabaseType, QueryHistoryEntry } from "$lib/types/diff";
   import type { SavedConnection } from "$lib/types/connections";
 
   interface Props {
@@ -40,10 +40,71 @@
   let error: string | null = $state(null);
   let meta: TableMeta | null = $state(null);
 
+  // Query history
+  let history: QueryHistoryEntry[] = $state([]);
+  let showHistory = $state(false);
+
   // Load connections on first render
   $effect(() => {
     loadConnections();
   });
+
+  async function refreshHistory() {
+    try {
+      const cid = selectedConnectionId || undefined;
+      history = await getQueryHistory(cid);
+    } catch {
+      history = [];
+    }
+  }
+
+  function toggleHistory() {
+    if (!showHistory) {
+      refreshHistory();
+    }
+    showHistory = !showHistory;
+  }
+
+  function selectQuery(q: string) {
+    query = q;
+    showHistory = false;
+  }
+
+  async function deleteEntry(id: string) {
+    try {
+      await deleteQueryHistoryEntry(id);
+      history = history.filter((e) => e.id !== id);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleClearHistory() {
+    try {
+      const cid = selectedConnectionId || undefined;
+      await clearQueryHistory(cid);
+      history = [];
+      showHistory = false;
+    } catch {
+      // ignore
+    }
+  }
+
+  function truncate(s: string, max: number): string {
+    const oneLine = s.replace(/\s+/g, " ").trim();
+    return oneLine.length <= max ? oneLine : oneLine.slice(0, max) + "...";
+  }
+
+  function formatRelativeTime(iso: string): string {
+    const now = Date.now();
+    const then = new Date(iso).getTime();
+    const diffSec = Math.floor((now - then) / 1000);
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
 
   async function handleLoad() {
     if (!query.trim()) {
@@ -87,6 +148,8 @@
         return;
       }
       onLoaded(meta);
+      // Refresh history count after successful load (backend auto-saved the query)
+      refreshHistory();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -248,7 +311,31 @@
     {/if}
 
     <div class="field">
-      <label for="query-{label}">SQL Query</label>
+      <div class="query-label-row">
+        <label for="query-{label}">SQL Query</label>
+        {#if history.length > 0 || selectedConnectionId}
+          <button class="history-btn" onclick={toggleHistory}>
+            Recent{history.length > 0 ? ` (${history.length})` : ""}
+          </button>
+        {/if}
+      </div>
+      {#if showHistory && history.length > 0}
+        <div class="history-dropdown">
+          {#each history as entry (entry.id)}
+            <div class="history-entry">
+              <button class="history-entry-btn" onclick={() => selectQuery(entry.query)} title={entry.query}>
+                <span class="history-query">{truncate(entry.query, 60)}</span>
+                <span class="history-time">{formatRelativeTime(entry.last_used_at)}</span>
+              </button>
+              <button class="history-delete" onclick={() => deleteEntry(entry.id)} title="Remove from history">&times;</button>
+            </div>
+          {/each}
+          <button class="history-clear" onclick={handleClearHistory}>Clear History</button>
+        </div>
+      {/if}
+      {#if showHistory && history.length === 0}
+        <div class="history-dropdown history-empty">No query history yet.</div>
+      {/if}
       <textarea
         id="query-{label}"
         bind:value={query}
@@ -383,6 +470,113 @@
     text-overflow: ellipsis;
   }
 
+  .query-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .history-btn {
+    all: unset;
+    font-size: 0.78em;
+    color: #888;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .history-btn:hover {
+    color: #396cd8;
+    background: rgba(57, 108, 216, 0.08);
+  }
+
+  .history-dropdown {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: inherit;
+    font-size: 0.85em;
+  }
+
+  .history-empty {
+    padding: 10px;
+    color: #999;
+    text-align: center;
+  }
+
+  .history-entry {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #eee;
+  }
+
+  .history-entry:last-of-type {
+    border-bottom: none;
+  }
+
+  .history-entry-btn {
+    all: unset;
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    cursor: pointer;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .history-entry-btn:hover {
+    background: rgba(57, 108, 216, 0.06);
+  }
+
+  .history-query {
+    font-family: monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .history-time {
+    color: #999;
+    font-size: 0.85em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .history-delete {
+    all: unset;
+    padding: 4px 8px;
+    cursor: pointer;
+    color: #ccc;
+    font-size: 1.1em;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .history-delete:hover {
+    color: #e74c3c;
+  }
+
+  .history-clear {
+    all: unset;
+    display: block;
+    width: 100%;
+    text-align: center;
+    padding: 6px;
+    font-size: 0.85em;
+    color: #999;
+    cursor: pointer;
+    border-top: 1px solid #eee;
+  }
+
+  .history-clear:hover {
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.05);
+  }
+
   select, input, textarea {
     padding: 8px;
     border-radius: 4px;
@@ -474,6 +668,22 @@
 
     .conn-summary {
       background: rgba(107, 154, 255, 0.1);
+    }
+
+    .history-dropdown {
+      border-color: #444;
+    }
+
+    .history-entry {
+      border-bottom-color: #333;
+    }
+
+    .history-delete {
+      color: #666;
+    }
+
+    .history-clear {
+      border-top-color: #333;
     }
   }
 </style>

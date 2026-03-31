@@ -19,6 +19,7 @@ use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
+use crate::query_history::{self, QueryHistoryEntry};
 use crate::snowflake;
 use crate::types::{
     ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
@@ -106,6 +107,7 @@ pub fn load_database_source(
     query: String,
     label: String,
     db_type: db_loader::DatabaseType,
+    app_handle: tauri::AppHandle,
     state: State<DuckDbState>,
     log: State<ActivityLog>,
 ) -> Result<TableMeta, String> {
@@ -121,7 +123,7 @@ pub fn load_database_source(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log).map_err(
+    let result = db_loader::load_from_database(&conn, &conn_string, &query, &table_name, &db_type, &log).map_err(
         |e: DiffDonkeyError| {
             // SECURITY: Sanitize connection errors to avoid leaking credentials.
             // The full error is logged to stderr for debugging.
@@ -137,7 +139,15 @@ pub fn load_database_source(
                 e.into()
             }
         },
-    )
+    );
+
+    // Auto-save query to history on success (no connection_id for manual mode)
+    if result.is_ok() {
+        let history_path = query_history::get_history_path(&app_handle);
+        let _ = query_history::add_to_history(&history_path, None, &query);
+    }
+
+    result
 }
 
 /// Compare schemas of the two loaded sources.
@@ -523,6 +533,7 @@ pub async fn load_snowflake_source(
     schema: Option<String>,
     query: String,
     label: String,
+    app_handle: tauri::AppHandle,
     state: State<'_, DuckDbState>,
     log: State<'_, ActivityLog>,
 ) -> Result<TableMeta, String> {
@@ -579,8 +590,16 @@ pub async fn load_snowflake_source(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
-        .map_err(|e: DiffDonkeyError| e.into())
+    let load_result = snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
+        .map_err(|e: DiffDonkeyError| e.into());
+
+    // Auto-save query to history on success (no connection_id for manual Snowflake)
+    if load_result.is_ok() {
+        let history_path = query_history::get_history_path(&app_handle);
+        let _ = query_history::add_to_history(&history_path, None, &query);
+    }
+
+    load_result
 }
 
 // ─── Export Commands ────────────────────────────────────────────────────────
@@ -933,8 +952,15 @@ pub async fn load_from_saved_connection(
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
 
-        return snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
+        let load_result = snowflake::load_results_to_duckdb(&conn, &result, &table_name, &log)
             .map_err(|e: DiffDonkeyError| e.into());
+
+        if load_result.is_ok() {
+            let history_path = query_history::get_history_path(&app_handle);
+            let _ = query_history::add_to_history(&history_path, Some(&id), &query);
+        }
+
+        return load_result;
     }
 
     // If SSH tunneling is enabled, establish tunnel and rewrite host/port
@@ -1001,6 +1027,12 @@ pub async fn load_from_saved_connection(
                     e.into()
                 }
             });
+
+    // Auto-save query to history on success
+    if result.is_ok() {
+        let history_path = query_history::get_history_path(&app_handle);
+        let _ = query_history::add_to_history(&history_path, Some(&id), &query);
+    }
 
     // _tunnel is dropped here, which signals the background thread to stop
     result
@@ -1315,4 +1347,36 @@ mod tests {
         std::fs::remove_file(&path_all).ok();
         std::fs::remove_file(&path_diffs).ok();
     }
+}
+
+// ─── Query History Commands ─────────────────────────────────────────────────
+
+/// Get query history entries, optionally filtered by connection ID.
+#[tauri::command]
+pub fn get_query_history(
+    connection_id: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<QueryHistoryEntry>, String> {
+    let path = query_history::get_history_path(&app_handle);
+    query_history::list_history(&path, connection_id.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Delete a single query history entry by ID.
+#[tauri::command]
+pub fn delete_query_history_entry(
+    id: String,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let path = query_history::get_history_path(&app_handle);
+    query_history::delete_history_entry(&path, &id).map_err(|e| e.to_string())
+}
+
+/// Clear query history, optionally for a specific connection.
+#[tauri::command]
+pub fn clear_query_history(
+    connection_id: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let path = query_history::get_history_path(&app_handle);
+    query_history::clear_history(&path, connection_id.as_deref()).map_err(|e| e.to_string())
 }

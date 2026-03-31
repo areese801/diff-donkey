@@ -6,7 +6,7 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry, QueryHistoryEntry } from "./types/diff";
 import type { SavedConnection } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
@@ -165,4 +165,25 @@ export async function getActivityLog(): Promise<QueryLogEntry[]> {
 /** Clear the SQL query log */
 export async function clearActivityLog(): Promise<void> {
   return invoke<void>("clear_activity_log");
+}
+
+// ─── Query History ──────────────────────────────────────────────────────────
+
+/** Get query history entries, optionally filtered by connection ID */
+export async function getQueryHistory(connectionId?: string): Promise<QueryHistoryEntry[]> {
+  return invoke<QueryHistoryEntry[]>("get_query_history", {
+    connectionId: connectionId ?? null,
+  });
+}
+
+/** Delete a single query history entry by ID */
+export async function deleteQueryHistoryEntry(id: string): Promise<void> {
+  return invoke<void>("delete_query_history_entry", { id });
+}
+
+/** Clear query history, optionally for a specific connection */
+export async function clearQueryHistory(connectionId?: string): Promise<void> {
+  return invoke<void>("clear_query_history", {
+    connectionId: connectionId ?? null,
+  });
 }

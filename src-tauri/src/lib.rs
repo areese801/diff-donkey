@@ -6,6 +6,7 @@ mod db_loader;
 mod diff;
 mod error;
 mod loader;
+mod query_history;
 pub mod snowflake;
 mod ssh_tunnel;
 mod types;
@@ -35,6 +36,9 @@ pub fn run() {
             commands::load_snowflake_source,
             commands::get_activity_log,
             commands::clear_activity_log,
+            commands::get_query_history,
+            commands::delete_query_history_entry,
+            commands::clear_query_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
