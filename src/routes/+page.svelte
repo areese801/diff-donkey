@@ -1,7 +1,7 @@
 <script lang="ts">
   import SourceSelector from "$lib/components/SourceSelector.svelte";
   import TabNav from "$lib/components/TabNav.svelte";
-  import DiffConfig from "$lib/components/DiffConfig.svelte";
+  import DiffConfigStrip from "$lib/components/DiffConfigStrip.svelte";
   import ColumnsTab from "$lib/components/ColumnsTab.svelte";
   import OverviewTab from "$lib/components/OverviewTab.svelte";
   import PrimaryKeysTab from "$lib/components/PrimaryKeysTab.svelte";
@@ -18,11 +18,6 @@
   let activityOpen = $state(false);
 
   let bothLoaded = $derived(!!$sourceA && !!$sourceB);
-  let sharedColumns = $derived(schemaComparison?.shared.map(c => ({
-    name: c.name,
-    data_type: c.type_a,
-  })) ?? []);
-
   $effect(() => {
     if (bothLoaded) {
       fetchSchemaComparison();
@@ -79,8 +74,10 @@
     <SourceSelector />
 
     {#if bothLoaded}
-      <DiffConfig
-        columns={sharedColumns}
+      <DiffConfigStrip
+        sourceA={$sourceA}
+        sourceB={$sourceB}
+        {schemaComparison}
         onRunDiff={handleRunDiff}
         isLoading={$isLoading}
       />
