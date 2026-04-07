@@ -13,7 +13,10 @@
 - [x] Per-column minor counts in Overview table
 - [x] DB Activity Log (collapsible bottom panel)
 - [x] Snowflake connectivity via REST API (PR #6)
-- [x] SSH tunneling via russh (PR #7)
+- [x] SSH tunneling via russh (PR #8)
+- [x] Ignored columns + WHERE clause filtering (PR #9)
+- [x] Export diff results — CSV, Parquet, JSON (PR #10)
+- [x] Query history — remember recent queries per connection (PR #11)
 
 ## Manual Testing Needed
 
@@ -22,19 +25,15 @@
 - [ ] **Snowflake connectivity** — test with real Snowflake account (password auth, key-pair auth, query execution, data loading)
 - [ ] **SSH tunneling** — test with a real bastion host (Postgres or MySQL behind SSH, verify tunnel + query works)
 
+## Done (cont.)
+
+- [x] **Connection colors** — visual tagging for prod vs dev (already in codebase)
+
 ## Up Next
 
 ### UX Improvements
 
-- [ ] **Ignored columns** — per-column "Ignore" toggle to exclude from diff
-- [ ] **WHERE clause filtering** — restrict comparison to subset of rows
-- [ ] **Query history** — remember recent queries per saved connection
-- [ ] **Connection colors** — visual tagging for prod vs dev
 - [ ] **Connection import/export** — share profiles minus passwords
-
-## v0.2.0: Export & Reporting
-
-- [ ] **Export diff results** — save to CSV, Parquet, or DuckDB table
 
 ## Cross-Platform Testing
 

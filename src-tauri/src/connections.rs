@@ -8,7 +8,7 @@
 /// Passwords are stored separately in the OS keychain via the `keyring` crate
 /// (macOS Keychain, Windows Credential Manager, Linux Secret Service).
 /// This keeps credentials out of the JSON file on disk.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::DiffDonkeyError;
 
@@ -491,6 +491,183 @@ pub fn build_snowflake_auth(
     }
 }
 
+// ─── Import / Export ─────────────────────────────────────────────────────────
+
+/// A connection profile stripped of IDs, passwords, and timestamps for export.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExportedConnection {
+    pub name: String,
+    pub db_type: String,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub database: Option<String>,
+    pub username: Option<String>,
+    pub schema: Option<String>,
+    pub ssl: bool,
+    pub color: Option<String>,
+    pub account_url: Option<String>,
+    pub warehouse: Option<String>,
+    pub role: Option<String>,
+    pub auth_method: Option<String>,
+    pub private_key_path: Option<String>,
+    pub ssh_enabled: bool,
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub ssh_username: Option<String>,
+    pub ssh_auth_method: Option<String>,
+    pub ssh_key_path: Option<String>,
+}
+
+/// Top-level export envelope with version and timestamp.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConnectionExport {
+    pub version: u32,
+    pub exported_at: String,
+    pub connections: Vec<ExportedConnection>,
+}
+
+/// Summary returned after importing connections.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImportResult {
+    pub imported: usize,
+    pub skipped: usize,
+    pub skipped_names: Vec<String>,
+}
+
+impl From<&SavedConnection> for ExportedConnection {
+    fn from(c: &SavedConnection) -> Self {
+        ExportedConnection {
+            name: c.name.clone(),
+            db_type: c.db_type.clone(),
+            host: c.host.clone(),
+            port: c.port,
+            database: c.database.clone(),
+            username: c.username.clone(),
+            schema: c.schema.clone(),
+            ssl: c.ssl,
+            color: c.color.clone(),
+            account_url: c.account_url.clone(),
+            warehouse: c.warehouse.clone(),
+            role: c.role.clone(),
+            auth_method: c.auth_method.clone(),
+            private_key_path: c.private_key_path.clone(),
+            ssh_enabled: c.ssh_enabled,
+            ssh_host: c.ssh_host.clone(),
+            ssh_port: c.ssh_port,
+            ssh_username: c.ssh_username.clone(),
+            ssh_auth_method: c.ssh_auth_method.clone(),
+            ssh_key_path: c.ssh_key_path.clone(),
+        }
+    }
+}
+
+/// Export all saved connections to a JSON file. Passwords and IDs are stripped.
+pub fn export_connections(connections_path: &Path) -> Result<ConnectionExport, DiffDonkeyError> {
+    let connections = list_connections(&connections_path.to_path_buf())?;
+    let exported: Vec<ExportedConnection> = connections.iter().map(ExportedConnection::from).collect();
+    let now = chrono::Utc::now().to_rfc3339();
+    Ok(ConnectionExport {
+        version: 1,
+        exported_at: now,
+        connections: exported,
+    })
+}
+
+/// Write a ConnectionExport to a file as pretty-printed JSON.
+pub fn write_export_file(
+    export_data: &ConnectionExport,
+    output_path: &Path,
+) -> Result<(), DiffDonkeyError> {
+    let json = serde_json::to_string_pretty(export_data)
+        .map_err(|e| DiffDonkeyError::Validation(e.to_string()))?;
+    std::fs::write(output_path, json)?;
+    Ok(())
+}
+
+/// Import connections from a JSON file. Skips connections whose name already exists.
+/// Returns a summary of how many were imported vs. skipped.
+pub fn import_connections(
+    connections_path: &Path,
+    export_data: &ConnectionExport,
+) -> Result<ImportResult, DiffDonkeyError> {
+    if export_data.version != 1 {
+        return Err(DiffDonkeyError::Validation(format!(
+            "Unsupported export version: {}. Expected 1.",
+            export_data.version
+        )));
+    }
+
+    let mut existing = list_connections(&connections_path.to_path_buf())?;
+    let existing_names: std::collections::HashSet<String> =
+        existing.iter().map(|c| c.name.clone()).collect();
+
+    let mut imported = 0;
+    let mut skipped_names = Vec::new();
+
+    for ec in &export_data.connections {
+        if existing_names.contains(&ec.name) {
+            skipped_names.push(ec.name.clone());
+            continue;
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = SavedConnection {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: ec.name.clone(),
+            db_type: ec.db_type.clone(),
+            host: ec.host.clone(),
+            port: ec.port,
+            database: ec.database.clone(),
+            username: ec.username.clone(),
+            schema: ec.schema.clone(),
+            ssl: ec.ssl,
+            color: ec.color.clone(),
+            account_url: ec.account_url.clone(),
+            warehouse: ec.warehouse.clone(),
+            role: ec.role.clone(),
+            auth_method: ec.auth_method.clone(),
+            private_key_path: ec.private_key_path.clone(),
+            ssh_enabled: ec.ssh_enabled,
+            ssh_host: ec.ssh_host.clone(),
+            ssh_port: ec.ssh_port,
+            ssh_username: ec.ssh_username.clone(),
+            ssh_auth_method: ec.ssh_auth_method.clone(),
+            ssh_key_path: ec.ssh_key_path.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        existing.push(conn);
+        imported += 1;
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = connections_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Write back
+    let json = serde_json::to_string_pretty(&existing)
+        .map_err(|e| DiffDonkeyError::Validation(e.to_string()))?;
+    std::fs::write(connections_path, json)?;
+
+    Ok(ImportResult {
+        imported,
+        skipped: skipped_names.len(),
+        skipped_names,
+    })
+}
+
+/// Read and parse a ConnectionExport from a JSON file.
+pub fn read_export_file(path: &Path) -> Result<ConnectionExport, DiffDonkeyError> {
+    let data = std::fs::read_to_string(path)?;
+    let export: ConnectionExport =
+        serde_json::from_str(&data).map_err(|e| DiffDonkeyError::Validation(format!(
+            "Invalid connection export file: {}",
+            e
+        )))?;
+    Ok(export)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,5 +1026,232 @@ mod tests {
         conn.ssh_auth_method = Some("key".to_string());
         conn.ssh_key_path = Some("/home/user/.ssh/id_rsa".to_string());
         assert!(validate_connection(&conn).is_ok());
+    }
+
+    // ─── Import / Export Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_export_strips_passwords_and_ids() {
+        let path = PathBuf::from("/tmp/test_dd_export_strip.json");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = test_conn("postgres");
+        let json = serde_json::to_string_pretty(&vec![conn]).unwrap();
+        std::fs::write(&path, json).unwrap();
+
+        let export = export_connections(&path).unwrap();
+        assert_eq!(export.connections.len(), 1);
+
+        let exported_json = serde_json::to_string(&export.connections[0]).unwrap();
+        assert!(!exported_json.contains("\"id\""));
+        assert!(!exported_json.contains("\"created_at\""));
+        assert!(!exported_json.contains("\"updated_at\""));
+        assert!(!exported_json.contains("password"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_export_format() {
+        let path = PathBuf::from("/tmp/test_dd_export_format.json");
+        let _ = std::fs::remove_file(&path);
+
+        let connections = vec![test_conn("postgres"), test_conn("mysql")];
+        let json = serde_json::to_string_pretty(&connections).unwrap();
+        std::fs::write(&path, json).unwrap();
+
+        let export = export_connections(&path).unwrap();
+        assert_eq!(export.version, 1);
+        assert!(!export.exported_at.is_empty());
+        assert_eq!(export.connections.len(), 2);
+        assert_eq!(export.connections[0].db_type, "postgres");
+        assert_eq!(export.connections[1].db_type, "mysql");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_import_creates_new_connections() {
+        let path = PathBuf::from("/tmp/test_dd_import_new.json");
+        let _ = std::fs::remove_file(&path);
+
+        let export = ConnectionExport {
+            version: 1,
+            exported_at: "2026-04-07T00:00:00Z".to_string(),
+            connections: vec![ExportedConnection {
+                name: "Import Test".to_string(),
+                db_type: "postgres".to_string(),
+                host: Some("db.example.com".to_string()),
+                port: Some(5432),
+                database: Some("testdb".to_string()),
+                username: Some("user".to_string()),
+                schema: None,
+                ssl: false,
+                color: None,
+                account_url: None,
+                warehouse: None,
+                role: None,
+                auth_method: None,
+                private_key_path: None,
+                ssh_enabled: false,
+                ssh_host: None,
+                ssh_port: None,
+                ssh_username: None,
+                ssh_auth_method: None,
+                ssh_key_path: None,
+            }],
+        };
+
+        let result = import_connections(&path, &export).unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped, 0);
+
+        let loaded = list_connections(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].name, "Import Test");
+        assert!(!loaded[0].id.is_empty());
+        assert!(!loaded[0].created_at.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_import_skips_duplicates() {
+        let path = PathBuf::from("/tmp/test_dd_import_dup.json");
+        let _ = std::fs::remove_file(&path);
+
+        // Pre-populate with an existing connection
+        let existing = test_conn("postgres");
+        let json = serde_json::to_string_pretty(&vec![existing]).unwrap();
+        std::fs::write(&path, json).unwrap();
+
+        let export = ConnectionExport {
+            version: 1,
+            exported_at: "2026-04-07T00:00:00Z".to_string(),
+            connections: vec![
+                ExportedConnection {
+                    name: "Test Connection".to_string(), // same name as existing
+                    db_type: "postgres".to_string(),
+                    host: Some("other.example.com".to_string()),
+                    port: Some(5432),
+                    database: None,
+                    username: None,
+                    schema: None,
+                    ssl: false,
+                    color: None,
+                    account_url: None,
+                    warehouse: None,
+                    role: None,
+                    auth_method: None,
+                    private_key_path: None,
+                    ssh_enabled: false,
+                    ssh_host: None,
+                    ssh_port: None,
+                    ssh_username: None,
+                    ssh_auth_method: None,
+                    ssh_key_path: None,
+                },
+                ExportedConnection {
+                    name: "New Connection".to_string(),
+                    db_type: "mysql".to_string(),
+                    host: Some("new.example.com".to_string()),
+                    port: Some(3306),
+                    database: None,
+                    username: None,
+                    schema: None,
+                    ssl: false,
+                    color: None,
+                    account_url: None,
+                    warehouse: None,
+                    role: None,
+                    auth_method: None,
+                    private_key_path: None,
+                    ssh_enabled: false,
+                    ssh_host: None,
+                    ssh_port: None,
+                    ssh_username: None,
+                    ssh_auth_method: None,
+                    ssh_key_path: None,
+                },
+            ],
+        };
+
+        let result = import_connections(&path, &export).unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.skipped_names, vec!["Test Connection"]);
+
+        let loaded = list_connections(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_import_invalid_json() {
+        let result: Result<ConnectionExport, _> =
+            serde_json::from_str("not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_import_invalid_version() {
+        let path = PathBuf::from("/tmp/test_dd_import_ver.json");
+        let _ = std::fs::remove_file(&path);
+
+        let export = ConnectionExport {
+            version: 99,
+            exported_at: "2026-04-07T00:00:00Z".to_string(),
+            connections: vec![],
+        };
+
+        let result = import_connections(&path, &export);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unsupported export version"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_roundtrip_export_import() {
+        let src_path = PathBuf::from("/tmp/test_dd_roundtrip_src.json");
+        let dst_path = PathBuf::from("/tmp/test_dd_roundtrip_dst.json");
+        let _ = std::fs::remove_file(&src_path);
+        let _ = std::fs::remove_file(&dst_path);
+
+        // Create source connections
+        let mut pg = test_conn("postgres");
+        pg.name = "Roundtrip PG".to_string();
+        pg.color = Some("#e74c3c".to_string());
+        let mut my = test_conn("mysql");
+        my.name = "Roundtrip MySQL".to_string();
+        my.port = Some(3306);
+
+        let json = serde_json::to_string_pretty(&vec![pg, my]).unwrap();
+        std::fs::write(&src_path, json).unwrap();
+
+        // Export
+        let export = export_connections(&src_path).unwrap();
+        assert_eq!(export.connections.len(), 2);
+
+        // Import into empty target
+        let result = import_connections(&dst_path, &export).unwrap();
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped, 0);
+
+        // Verify imported connections
+        let loaded = list_connections(&dst_path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Roundtrip PG");
+        assert_eq!(loaded[0].color, Some("#e74c3c".to_string()));
+        assert_eq!(loaded[1].name, "Roundtrip MySQL");
+        assert_eq!(loaded[1].port, Some(3306));
+
+        // IDs should be different from source
+        let source = list_connections(&src_path).unwrap();
+        assert_ne!(loaded[0].id, source[0].id);
+
+        let _ = std::fs::remove_file(&src_path);
+        let _ = std::fs::remove_file(&dst_path);
     }
 }

@@ -7,7 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry, QueryHistoryEntry } from "./types/diff";
-import type { SavedConnection } from "./types/connections";
+import type { SavedConnection, ImportResult } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
 export async function loadSource(
@@ -153,6 +153,18 @@ export async function loadFromSavedConnection(
   label: "a" | "b"
 ): Promise<TableMeta> {
   return invoke<TableMeta>("load_from_saved_connection", { id, query, label });
+}
+
+// ─── Connection Import / Export ───────────────────────────────────────────────
+
+/** Export all saved connections to a JSON file (no passwords/IDs). Returns count exported. */
+export async function exportConnectionsToFile(path: string): Promise<number> {
+  return invoke<number>("export_connections_to_file", { path });
+}
+
+/** Import connections from a JSON file. Skips duplicates by name. */
+export async function importConnectionsFromFile(path: string): Promise<ImportResult> {
+  return invoke<ImportResult>("import_connections_from_file", { path });
 }
 
 // ─── Activity Log ────────────────────────────────────────────────────────────

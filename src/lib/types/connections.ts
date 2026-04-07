@@ -31,3 +31,9 @@ export interface SavedConnection {
   created_at: string;
   updated_at: string;
 }
+
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  skipped_names: string[];
+}
