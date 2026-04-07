@@ -17,23 +17,22 @@
 - [x] Ignored columns + WHERE clause filtering (PR #9)
 - [x] Export diff results — CSV, Parquet, JSON (PR #10)
 - [x] Query history — remember recent queries per connection (PR #11)
+- [x] Connection import/export — share profiles minus passwords (PR #12)
+- [x] Auto-populate table picker — cascading dropdowns (PR #13)
+- [x] PK expression mode — synthetic join keys (PR #14)
+- [x] Remote Parquet/CSV on S3/GCS/HTTP — DuckDB httpfs (PR #15)
+- [x] Connection colors — visual tagging for prod vs dev
 
 ## Manual Testing Needed
 
-- [ ] **Postgres connectivity** — test with a real Postgres instance (save connection, test connection, load data, run diff)
+- [ ] **Postgres connectivity** — test with a real Postgres instance (save connection, test connection, load data, run diff, table picker)
 - [ ] **MySQL connectivity** — same as Postgres with MySQL instance
-- [ ] **Snowflake connectivity** — test with real Snowflake account (password auth, key-pair auth, query execution, data loading)
+- [ ] **Snowflake connectivity** — test with real Snowflake account (password auth, key-pair auth, query execution, data loading, table picker)
 - [ ] **SSH tunneling** — test with a real bastion host (Postgres or MySQL behind SSH, verify tunnel + query works)
-
-## Done (cont.)
-
-- [x] **Connection colors** — visual tagging for prod vs dev (already in codebase)
-
-## Up Next
-
-### UX Improvements
-
-- [ ] **Connection import/export** — share profiles minus passwords
+- [ ] **Remote files** — test S3/GCS with real credentials, test public HTTP Parquet URL
+- [ ] **Query history** — verify auto-save on successful load, deduplication, deletion
+- [ ] **Connection import/export** — export, edit JSON, re-import, verify duplicate skipping
+- [ ] **PK expression mode** — test CONCAT, LOWER, CAST expressions with real data
 
 ## Cross-Platform Testing
 
@@ -43,8 +42,5 @@
 ## Future / Research
 
 - [ ] **Snowflake-native diff engine** — push diff to Snowflake for 100M+ rows
-- [ ] **Auto-populate table picker** — SHOW DATABASES → SCHEMAS → TABLES
-- [ ] **PK expression mode** — synthetic join keys via DuckDB expressions
-- [ ] **Remote Parquet/CSV on S3/GCS** — DuckDB httpfs extension
 - [ ] **BigQuery** — gcp-bigquery-client crate
 - [ ] **Generic ODBC** — odbc-api + arrow-odbc (stretch)
