@@ -86,7 +86,7 @@
 
     {#if bothLoaded}
       <!-- Setup area: collapsible after diff runs -->
-      <div class="setup-section">
+      <div class="setup-section" class:collapsed={setupCollapsed}>
         <button class="setup-handle" onclick={() => setupCollapsed = !setupCollapsed}>
           <span class="handle-icon">{setupCollapsed ? "▶" : "▼"}</span>
           {#if setupCollapsed}
@@ -97,14 +97,16 @@
         </button>
 
         {#if !setupCollapsed}
-          <SourceSelector />
-          <DiffConfigStrip
-            sourceA={$sourceA}
-            sourceB={$sourceB}
-            {schemaComparison}
-            onRunDiff={handleRunDiff}
-            isLoading={$isLoading}
-          />
+          <div class="setup-content">
+            <SourceSelector />
+            <DiffConfigStrip
+              sourceA={$sourceA}
+              sourceB={$sourceB}
+              {schemaComparison}
+              onRunDiff={handleRunDiff}
+              isLoading={$isLoading}
+            />
+          </div>
         {/if}
       </div>
 
@@ -165,14 +167,20 @@
 
   .setup-section {
     margin-bottom: 16px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .setup-section.collapsed {
+    border-radius: 6px;
   }
 
   .setup-handle {
     width: 100%;
     padding: 8px 12px;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    background: transparent;
+    border: none;
+    background: #f5f5f5;
     cursor: pointer;
     font-size: 0.85em;
     font-weight: 600;
@@ -181,12 +189,15 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
   }
 
   .setup-handle:hover {
     color: #555;
-    background: #f0f0f0;
+    background: #eeeeee;
+  }
+
+  .setup-content {
+    padding: 12px;
   }
 
   .setup-summary {
@@ -283,8 +294,12 @@
       background: #3a3a3a;
     }
 
-    .setup-handle {
+    .setup-section {
       border-color: #444;
+    }
+
+    .setup-handle {
+      background: #333;
       color: #999;
     }
 

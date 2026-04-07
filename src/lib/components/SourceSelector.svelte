@@ -231,9 +231,8 @@
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
+      <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
     {/if}
-
-    <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
   </div>
 
   <!-- Source B row -->
@@ -298,7 +297,6 @@
     font-size: 0.75em;
     color: #888;
     white-space: nowrap;
-    margin-left: auto;
   }
 
   .manage-btn:hover {
