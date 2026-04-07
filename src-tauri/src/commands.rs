@@ -799,6 +799,36 @@ pub async fn load_from_saved_connection(
     result
 }
 
+// ─── Connection Import / Export Commands ─────────────────────────────────────
+
+/// Export all saved connections to a JSON file (no passwords, no IDs).
+/// The frontend provides the file path via the save dialog.
+#[tauri::command]
+pub fn export_connections_to_file(
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<usize, String> {
+    let connections_path = connections::get_connections_path(&app_handle);
+    let export = connections::export_connections(&connections_path).map_err(|e| e.to_string())?;
+    let count = export.connections.len();
+    connections::write_export_file(&export, std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// Import connections from a JSON file. Skips duplicates by name.
+/// The frontend provides the file path via the open dialog.
+#[tauri::command]
+pub fn import_connections_from_file(
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<connections::ImportResult, String> {
+    let export_data =
+        connections::read_export_file(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    let connections_path = connections::get_connections_path(&app_handle);
+    connections::import_connections(&connections_path, &export_data).map_err(|e| e.to_string())
+}
+
 // ─── Activity Log Commands ──────────────────────────────────────────────────
 
 /// Get all SQL query log entries.

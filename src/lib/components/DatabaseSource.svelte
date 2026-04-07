@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { loadDatabaseSource, loadFromSavedConnection, loadSnowflakeSource } from "$lib/tauri";
+  import { loadDatabaseSource, loadFromSavedConnection, loadSnowflakeSource, exportConnectionsToFile, importConnectionsFromFile } from "$lib/tauri";
   import { savedConnections, loadConnections } from "$lib/stores/connections";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import ConnectionForm from "$lib/components/ConnectionForm.svelte";
   import type { TableMeta, DatabaseType } from "$lib/types/diff";
   import type { SavedConnection } from "$lib/types/connections";
@@ -104,6 +104,41 @@
     return $savedConnections.find((c) => c.id === selectedConnectionId);
   }
 
+  // Import/Export
+  let importExportStatus: string | null = $state(null);
+
+  async function handleExport() {
+    try {
+      const path = await save({
+        defaultPath: "diff-donkey-connections.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const count = await exportConnectionsToFile(path);
+      importExportStatus = `Exported ${count} connection${count !== 1 ? "s" : ""}.`;
+    } catch (e) {
+      importExportStatus = `Export failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function handleImport() {
+    try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const result = await importConnectionsFromFile(path as string);
+      await loadConnections();
+      const parts: string[] = [];
+      if (result.imported > 0) parts.push(`Imported ${result.imported}`);
+      if (result.skipped > 0) parts.push(`Skipped ${result.skipped} (${result.skipped_names.join(", ")})`);
+      importExportStatus = parts.join(". ") || "No connections to import.";
+    } catch (e) {
+      importExportStatus = `Import failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
   async function handleSelectKeyFile() {
     const selected = await open({
       multiple: false,
@@ -135,6 +170,13 @@
         </select>
         <button class="btn-small" onclick={() => (showNewForm = true)} title="New Connection">+</button>
       </div>
+      <div class="conn-actions-row">
+        <button class="btn-small btn-subtle" onclick={handleImport} title="Import connections from file">Import</button>
+        <button class="btn-small btn-subtle" onclick={handleExport} title="Export connections to file">Export</button>
+      </div>
+      {#if importExportStatus}
+        <p class="import-export-status">{importExportStatus}</p>
+      {/if}
     </div>
 
     {#if selectedConnectionId}
@@ -320,6 +362,25 @@
     background: rgba(57, 108, 216, 0.1);
   }
 
+  .conn-actions-row {
+    display: flex;
+    gap: 6px;
+  }
+
+  .btn-subtle {
+    font-size: 0.8em;
+    font-weight: 400;
+    padding: 4px 10px;
+    color: #888;
+    border-color: #ddd;
+  }
+
+  .import-export-status {
+    font-size: 0.8em;
+    color: #666;
+    margin: 0;
+  }
+
   .conn-summary {
     display: flex;
     align-items: center;
@@ -466,6 +527,15 @@
 
     .btn-small {
       border-color: #555;
+    }
+
+    .btn-subtle {
+      color: #999;
+      border-color: #444;
+    }
+
+    .import-export-status {
+      color: #999;
     }
 
     .divider-line {
