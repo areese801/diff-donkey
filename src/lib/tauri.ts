@@ -99,6 +99,27 @@ export async function loadSnowflakeSource(
   });
 }
 
+// ─── Catalog Browsing ────────────────────────────────────────────────────────
+
+export interface CatalogItem {
+  name: string;
+}
+
+/** List databases, schemas, or tables for a saved connection */
+export async function listCatalog(
+  connectionId: string,
+  catalogType: "schemas" | "tables" | "databases",
+  database?: string,
+  schema?: string,
+): Promise<CatalogItem[]> {
+  return invoke<CatalogItem[]>("list_catalog", {
+    connectionId,
+    catalogType,
+    database: database ?? null,
+    schema: schema ?? null,
+  });
+}
+
 // ─── Connection Management ──────────────────────────────────────────────────
 
 /** List all saved database connections */
