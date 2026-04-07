@@ -121,10 +121,46 @@ pub enum ColumnTolerance {
 #[derive(Debug, serde::Deserialize)]
 pub struct DiffConfig {
     pub pk_columns: Vec<String>,
+    pub pk_expression: Option<String>,
     pub tolerance: Option<i32>,
     pub column_tolerances: Option<std::collections::HashMap<String, ColumnTolerance>>,
     pub ignored_columns: Option<Vec<String>>,
     pub where_clause: Option<String>,
+}
+
+/// Resolved primary key mode — either named columns or a SQL expression.
+///
+/// Think of this like Python's Union type: it's either a list of column names
+/// or a single SQL expression string. The diff engine uses this to decide
+/// how to build JOIN conditions and PK aliases in the _diff_join table.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(tag = "mode")]
+pub enum PkMode {
+    #[serde(rename = "columns")]
+    Columns { columns: Vec<String> },
+    #[serde(rename = "expression")]
+    Expression { expression: String },
+}
+
+impl PkMode {
+    /// Column name prefixes used in _diff_join (without the _a/_b suffix).
+    /// In column mode: ["pk_col1", "pk_col2", ...].
+    /// In expression mode: ["pk_expr"].
+    pub fn join_key_names(&self) -> Vec<String> {
+        match self {
+            PkMode::Columns { columns } => columns.iter().map(|c| format!("pk_{}", c)).collect(),
+            PkMode::Expression { .. } => vec!["pk_expr".to_string()],
+        }
+    }
+
+    /// The raw PK column names (for column mode) or a placeholder for expression mode.
+    /// Used for queries against source tables (GROUP BY, NULL checks).
+    pub fn source_column_names(&self) -> Vec<String> {
+        match self {
+            PkMode::Columns { columns } => columns.clone(),
+            PkMode::Expression { .. } => vec!["_pk_expr".to_string()],
+        }
+    }
 }
 
 /// Paginated row data — used for exclusive rows, duplicates, and diff rows.

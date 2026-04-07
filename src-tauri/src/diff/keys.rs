@@ -6,7 +6,7 @@ use duckdb::Connection;
 
 use crate::activity::ActivityLog;
 use crate::error::DiffDonkeyError;
-use crate::types::PagedRows;
+use crate::types::{PagedRows, PkMode};
 
 /// Get rows exclusive to one side (exist in A but not B, or vice versa).
 ///
@@ -16,7 +16,7 @@ use crate::types::PagedRows;
 pub fn get_exclusive_rows(
     conn: &Connection,
     side: &str,
-    pk_columns: &[String],
+    pk_mode: &PkMode,
     page: usize,
     page_size: usize,
     log: &ActivityLog,
@@ -27,9 +27,11 @@ pub fn get_exclusive_rows(
         _ => return Err(DiffDonkeyError::Validation(format!("Invalid side: {}", side))),
     };
 
+    let join_keys = pk_mode.join_key_names();
+
     // All opposite-side PK columns must be NULL
-    let null_check = pk_columns.iter()
-        .map(|pk| format!("\"pk_{}_{}\" IS NULL", pk, null_side))
+    let null_check = join_keys.iter()
+        .map(|k| format!("\"{}_{}\" IS NULL", k, null_side))
         .collect::<Vec<_>>().join(" AND ");
 
     let total: i64 = conn.query_row(
@@ -40,25 +42,48 @@ pub fn get_exclusive_rows(
     let offset = page * page_size;
     let columns = get_table_columns(conn, source_table)?;
 
-    // Select PK columns from _diff_join, join back to source
-    let pk_select = pk_columns.iter()
-        .map(|pk| format!("\"pk_{}_{}\"", pk, side))
-        .collect::<Vec<_>>().join(", ");
+    let sql = match pk_mode {
+        PkMode::Columns { columns: pk_columns } => {
+            // Select PK columns from _diff_join, join back to source
+            let pk_select = pk_columns.iter()
+                .map(|pk| format!("\"pk_{}_{}\"", pk, side))
+                .collect::<Vec<_>>().join(", ");
 
-    let join_conds = pk_columns.iter()
-        .map(|pk| format!("s.\"{}\" = excl.\"pk_{}_{}\"", pk, pk, side))
-        .collect::<Vec<_>>().join(" AND ");
+            let join_conds = pk_columns.iter()
+                .map(|pk| format!("s.\"{}\" = excl.\"pk_{}_{}\"", pk, pk, side))
+                .collect::<Vec<_>>().join(" AND ");
 
-    let order_by = pk_columns.iter()
-        .map(|pk| format!("s.\"{}\"", pk))
-        .collect::<Vec<_>>().join(", ");
+            let order_by = pk_columns.iter()
+                .map(|pk| format!("s.\"{}\"", pk))
+                .collect::<Vec<_>>().join(", ");
 
-    let sql = format!(
-        "SELECT s.* FROM {} s \
-         INNER JOIN (SELECT {} FROM _diff_join WHERE {} LIMIT {} OFFSET {}) excl \
-         ON {} ORDER BY {}",
-        source_table, pk_select, null_check, page_size, offset, join_conds, order_by
-    );
+            format!(
+                "SELECT s.* FROM {} s \
+                 INNER JOIN (SELECT {} FROM _diff_join WHERE {} LIMIT {} OFFSET {}) excl \
+                 ON {} ORDER BY {}",
+                source_table, pk_select, null_check, page_size, offset, join_conds, order_by
+            )
+        }
+        PkMode::Expression { expression } => {
+            // In expression mode, use the expression to join back to source.
+            // Use ROW_NUMBER to preserve pagination ordering.
+            format!(
+                "SELECT s.* FROM {src} s \
+                 INNER JOIN (\
+                   SELECT \"{key}_{side}\" FROM _diff_join WHERE {null_check} LIMIT {limit} OFFSET {offset}\
+                 ) excl \
+                 ON ({expr}) = excl.\"{key}_{side}\" \
+                 ORDER BY ({expr})",
+                src = source_table,
+                key = join_keys[0],
+                side = side,
+                null_check = null_check,
+                limit = page_size,
+                offset = offset,
+                expr = expression,
+            )
+        }
+    };
 
     let start = std::time::Instant::now();
     let rows = query_to_rows(conn, &sql, &columns)?;
@@ -75,7 +100,7 @@ pub fn get_exclusive_rows(
 pub fn get_duplicate_pks(
     conn: &Connection,
     side: &str,
-    pk_columns: &[String],
+    pk_mode: &PkMode,
     page: usize,
     page_size: usize,
     log: &ActivityLog,
@@ -86,31 +111,57 @@ pub fn get_duplicate_pks(
         _ => return Err(DiffDonkeyError::Validation(format!("Invalid side: {}", side))),
     };
 
-    let group_cols = pk_columns.iter()
-        .map(|pk| format!("\"{}\"", pk))
-        .collect::<Vec<_>>().join(", ");
+    let (total, columns, sql) = match pk_mode {
+        PkMode::Columns { columns: pk_columns } => {
+            let group_cols = pk_columns.iter()
+                .map(|pk| format!("\"{}\"", pk))
+                .collect::<Vec<_>>().join(", ");
 
-    let total: i64 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM (SELECT {} FROM {} GROUP BY {} HAVING COUNT(*) > 1)",
-            group_cols, source_table, group_cols
-        ),
-        [], |row| row.get(0),
-    )?;
+            let t: i64 = conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM (SELECT {gc} FROM {src} GROUP BY {gc} HAVING COUNT(*) > 1)",
+                    gc = group_cols, src = source_table
+                ),
+                [], |row| row.get(0),
+            )?;
 
-    let offset = page * page_size;
-    let mut columns: Vec<String> = pk_columns.to_vec();
-    columns.push("count".to_string());
+            let offset = page * page_size;
+            let mut cols: Vec<String> = pk_columns.to_vec();
+            cols.push("count".to_string());
 
-    let order_cols = pk_columns.iter()
-        .map(|pk| format!("\"{}\"", pk))
-        .collect::<Vec<_>>().join(", ");
+            let order_cols = pk_columns.iter()
+                .map(|pk| format!("\"{}\"", pk))
+                .collect::<Vec<_>>().join(", ");
 
-    let sql = format!(
-        "SELECT {}, COUNT(*) as count FROM {} GROUP BY {} HAVING COUNT(*) > 1 \
-         ORDER BY count DESC, {} LIMIT {} OFFSET {}",
-        group_cols, source_table, group_cols, order_cols, page_size, offset
-    );
+            let q = format!(
+                "SELECT {gc}, COUNT(*) as count FROM {src} GROUP BY {gc} HAVING COUNT(*) > 1 \
+                 ORDER BY count DESC, {oc} LIMIT {lim} OFFSET {off}",
+                gc = group_cols, src = source_table, oc = order_cols, lim = page_size, off = offset
+            );
+
+            (t, cols, q)
+        }
+        PkMode::Expression { expression } => {
+            let t: i64 = conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM (SELECT ({expr}) AS pk_expr FROM {src} GROUP BY pk_expr HAVING COUNT(*) > 1)",
+                    expr = expression, src = source_table
+                ),
+                [], |row| row.get(0),
+            )?;
+
+            let offset = page * page_size;
+            let cols = vec!["pk_expr".to_string(), "count".to_string()];
+
+            let q = format!(
+                "SELECT ({expr}) AS pk_expr, COUNT(*) as count FROM {src} GROUP BY pk_expr HAVING COUNT(*) > 1 \
+                 ORDER BY count DESC, pk_expr LIMIT {lim} OFFSET {off}",
+                expr = expression, src = source_table, lim = page_size, off = offset
+            );
+
+            (t, cols, q)
+        }
+    };
 
     let start = std::time::Instant::now();
     let rows = query_to_rows(conn, &sql, &columns)?;
@@ -226,14 +277,19 @@ mod tests {
             "status".into(),
             "created_at".into(),
         ];
-        stats::run_diff(&conn, &["id".to_string()], &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(), &None, &[], &log).unwrap();
+        let pk_mode = PkMode::Columns { columns: vec!["id".to_string()] };
+        stats::run_diff(&conn, &pk_mode, &compare_cols, &std::collections::HashMap::new(), None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(), &None, &[], &log).unwrap();
         conn
+    }
+
+    fn pk_columns_id() -> PkMode {
+        PkMode::Columns { columns: vec!["id".to_string()] }
     }
 
     #[test]
     fn test_exclusive_rows_a() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "a", &["id".to_string()], 0, 50, &test_log()).unwrap();
+        let result = get_exclusive_rows(&conn, "a", &pk_columns_id(), 0, 50, &test_log()).unwrap();
 
         // Row 8 (Henry Wilson) only exists in A
         assert_eq!(result.total, 1);
@@ -243,7 +299,7 @@ mod tests {
     #[test]
     fn test_exclusive_rows_b() {
         let conn = setup_diff_conn();
-        let result = get_exclusive_rows(&conn, "b", &["id".to_string()], 0, 50, &test_log()).unwrap();
+        let result = get_exclusive_rows(&conn, "b", &pk_columns_id(), 0, 50, &test_log()).unwrap();
 
         // Row 11 (Karen Martinez) only exists in B
         assert_eq!(result.total, 1);
@@ -253,9 +309,106 @@ mod tests {
     #[test]
     fn test_no_duplicate_pks() {
         let conn = setup_diff_conn();
-        let result = get_duplicate_pks(&conn, "a", &["id".to_string()], 0, 50, &test_log()).unwrap();
+        let result = get_duplicate_pks(&conn, "a", &pk_columns_id(), 0, 50, &test_log()).unwrap();
 
         assert_eq!(result.total, 0);
         assert_eq!(result.rows.len(), 0);
+    }
+
+    // ── PK Expression mode tests ─────────────────────────────────────────
+
+    fn setup_expr_diff_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                ('Alice', 'Smith', 100.0),
+                ('Bob', 'Jones', 200.0),
+                ('Carol', 'Lee', 300.0)
+            ) AS t(first_name, last_name, amount);
+
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                ('Alice', 'Smith', 100.5),
+                ('Bob', 'Jones', 200.0),
+                ('Dave', 'Kim', 400.0)
+            ) AS t(first_name, last_name, amount);"
+        ).unwrap();
+
+        let log = test_log();
+        let compare_cols: Vec<String> = vec!["amount".into()];
+        let col_types: std::collections::HashMap<String, String> = [("amount", "DOUBLE")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let pk_mode = PkMode::Expression {
+            expression: "CONCAT(first_name, '_', last_name)".to_string(),
+        };
+        stats::run_diff(
+            &conn, &pk_mode, &compare_cols, &col_types,
+            None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(),
+            &None, &[], &log,
+        ).unwrap();
+        conn
+    }
+
+    fn pk_expr_concat() -> PkMode {
+        PkMode::Expression {
+            expression: "CONCAT(first_name, '_', last_name)".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_pk_expression_exclusive_rows() {
+        let conn = setup_expr_diff_conn();
+
+        // Carol_Lee is exclusive to A
+        let result_a = get_exclusive_rows(&conn, "a", &pk_expr_concat(), 0, 50, &test_log()).unwrap();
+        assert_eq!(result_a.total, 1);
+        assert_eq!(result_a.rows.len(), 1);
+
+        // Dave_Kim is exclusive to B
+        let result_b = get_exclusive_rows(&conn, "b", &pk_expr_concat(), 0, 50, &test_log()).unwrap();
+        assert_eq!(result_b.total, 1);
+        assert_eq!(result_b.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_pk_expression_duplicate_pks() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_a AS SELECT * FROM (VALUES
+                ('Alice', 'X', 1.0),
+                ('Alice', 'X', 2.0),
+                ('Bob', 'Y', 3.0)
+            ) AS t(name, tag, amount);
+
+            CREATE TABLE source_b AS SELECT * FROM (VALUES
+                ('Alice', 'X', 1.5),
+                ('Bob', 'Y', 3.0)
+            ) AS t(name, tag, amount);"
+        ).unwrap();
+
+        let log = test_log();
+        let compare_cols: Vec<String> = vec!["amount".into()];
+        let col_types: std::collections::HashMap<String, String> = [("amount", "DOUBLE")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let pk_mode = PkMode::Expression {
+            expression: "CONCAT(name, '_', tag)".to_string(),
+        };
+        stats::run_diff(
+            &conn, &pk_mode, &compare_cols, &col_types,
+            None, &std::collections::HashMap::<String, crate::types::ColumnTolerance>::new(),
+            &None, &[], &log,
+        ).unwrap();
+
+        // source_a has Alice_X twice
+        let result = get_duplicate_pks(&conn, "a", &pk_mode, 0, 50, &test_log()).unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.rows.len(), 1);
+
+        // source_b has no duplicates
+        let result_b = get_duplicate_pks(&conn, "b", &pk_mode, 0, 50, &test_log()).unwrap();
+        assert_eq!(result_b.total, 0);
     }
 }

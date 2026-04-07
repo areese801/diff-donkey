@@ -4,12 +4,14 @@
 
   interface Props {
     columns: ColumnInfo[];
-    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null, ignoredColumns: string[], whereClause: string | null) => void;
+    onRunDiff: (pkColumns: string[], tolerance: number | null, columnTolerances: Record<string, ColumnTolerance> | null, ignoredColumns: string[], whereClause: string | null, pkExpression: string | null) => void;
     isLoading: boolean;
   }
 
   let { columns, onRunDiff, isLoading }: Props = $props();
 
+  let pkMode: "columns" | "expression" = $state("columns");
+  let pkExpression = $state("");
   let selectedPks: string[] = $state([]);
   let precisionInput = $state("");
 
@@ -130,7 +132,9 @@
 
     const hasTols = Object.keys(colTols).length > 0;
     const trimmedWhere = whereClause.trim();
-    onRunDiff(selectedPks, prec, hasTols ? colTols : null, ignoredCols, trimmedWhere || null);
+    const expr = pkMode === "expression" ? (pkExpression.trim() || null) : null;
+    const pks = pkMode === "columns" ? selectedPks : [];
+    onRunDiff(pks, prec, hasTols ? colTols : null, ignoredCols, trimmedWhere || null, expr);
   }
 
   function needsValueInput(mode: string): boolean {
@@ -140,12 +144,35 @@
 
 <div class="diff-config">
   <div class="config-row">
-    <label for="pk-select">Primary Key:</label>
-    <select id="pk-select" multiple bind:value={selectedPks} disabled={isLoading} class="pk-multi-select">
-      {#each columns as col}
-        <option value={col.name}>{col.name} ({col.data_type})</option>
-      {/each}
-    </select>
+    <div class="pk-mode-toggle">
+      <button class="mode-btn" class:active={pkMode === "columns"} onclick={() => pkMode = "columns"} disabled={isLoading}>
+        Columns
+      </button>
+      <button class="mode-btn" class:active={pkMode === "expression"} onclick={() => pkMode = "expression"} disabled={isLoading}>
+        Expression
+      </button>
+    </div>
+
+    {#if pkMode === "columns"}
+      <label for="pk-select">Primary Key:</label>
+      <select id="pk-select" multiple bind:value={selectedPks} disabled={isLoading} class="pk-multi-select">
+        {#each columns as col}
+          <option value={col.name}>{col.name} ({col.data_type})</option>
+        {/each}
+      </select>
+    {:else}
+      <div class="pk-expression">
+        <label for="pk-expr">Join Key Expression:</label>
+        <input
+          id="pk-expr"
+          type="text"
+          bind:value={pkExpression}
+          placeholder="e.g. CONCAT(first_name, '_', last_name)"
+          disabled={isLoading}
+          class="expression-input"
+        />
+      </div>
+    {/if}
 
     <label for="precision-input" title="Positive = decimal places (2 → hundredths). Negative = integer rounding (-1 → nearest 10, -2 → nearest 100).">Precision:</label>
     <input
@@ -173,7 +200,7 @@
 
     <button
       onclick={handleRun}
-      disabled={selectedPks.length === 0 || isLoading}
+      disabled={(pkMode === "columns" ? selectedPks.length === 0 : pkExpression.trim() === "") || isLoading}
     >
       {isLoading ? "Running..." : "Run Diff"}
     </button>
@@ -233,6 +260,52 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .pk-mode-toggle {
+    display: flex;
+    gap: 0;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #ccc;
+  }
+
+  .mode-btn {
+    padding: 4px 10px;
+    font-size: 0.8em;
+    font-weight: 500;
+    border: none;
+    border-radius: 0;
+    background: #e8e8e8;
+    color: #555;
+    cursor: pointer;
+  }
+
+  .mode-btn.active {
+    background: #396cd8;
+    color: white;
+  }
+
+  .mode-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pk-expression {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .expression-input {
+    width: 300px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+    font-family: monospace;
+    background: white;
+    color: inherit;
   }
 
   .pk-multi-select {
@@ -361,9 +434,24 @@
 
     select,
     .tolerance-input,
-    .where-input {
+    .where-input,
+    .expression-input {
       background: #2f2f2f;
       border-color: #555;
+    }
+
+    .pk-mode-toggle {
+      border-color: #555;
+    }
+
+    .mode-btn {
+      background: #444;
+      color: #aaa;
+    }
+
+    .mode-btn.active {
+      background: #396cd8;
+      color: white;
     }
 
     .col-name {
