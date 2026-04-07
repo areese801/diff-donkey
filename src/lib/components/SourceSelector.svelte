@@ -1,12 +1,12 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
-  import { loadSource } from "$lib/tauri";
+  import { loadSource, loadRemoteSource } from "$lib/tauri";
   import { sourceA, sourceB } from "$lib/stores/config";
   import DatabaseSource from "$lib/components/DatabaseSource.svelte";
   import ConnectionManager from "$lib/components/ConnectionManager.svelte";
-  import type { TableMeta } from "$lib/types/diff";
+  import type { TableMeta, RemoteCredentials } from "$lib/types/diff";
 
-  type SourceMode = "file" | "database";
+  type SourceMode = "file" | "database" | "remote";
 
   /** Current state for each source panel */
   let modeA: SourceMode = $state("file");
@@ -20,6 +20,62 @@
   let loadingA = $state(false);
   let loadingB = $state(false);
   let showConnectionManager = $state(false);
+
+  /** Remote source state */
+  let remoteUriA = $state("");
+  let remoteUriB = $state("");
+  let accessKeyA = $state("");
+  let accessKeyB = $state("");
+  let secretKeyA = $state("");
+  let secretKeyB = $state("");
+  let regionA = $state("");
+  let regionB = $state("");
+  let endpointA = $state("");
+  let endpointB = $state("");
+
+  function needsCredentials(uri: string): boolean {
+    return uri.startsWith("s3://") || uri.startsWith("gs://");
+  }
+
+  function getProvider(uri: string): string | null {
+    if (uri.startsWith("s3://")) return "s3";
+    if (uri.startsWith("gs://")) return "gcs";
+    return null;
+  }
+
+  async function loadRemote(label: "a" | "b") {
+    const uri = label === "a" ? remoteUriA : remoteUriB;
+    if (!uri.trim()) return;
+
+    if (label === "a") { loadingA = true; errorA = null; }
+    else { loadingB = true; errorB = null; }
+
+    const credentials: RemoteCredentials = {
+      provider: getProvider(uri),
+      access_key: (label === "a" ? accessKeyA : accessKeyB) || null,
+      secret_key: (label === "a" ? secretKeyA : secretKeyB) || null,
+      region: (label === "a" ? regionA : regionB) || null,
+      endpoint: (label === "a" ? endpointA : endpointB) || null,
+    };
+
+    try {
+      const meta = await loadRemoteSource(uri, label, credentials);
+      if (label === "a") {
+        metaA = meta;
+        sourceA.set(meta);
+      } else {
+        metaB = meta;
+        sourceB.set(meta);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (label === "a") errorA = msg;
+      else errorB = msg;
+    } finally {
+      if (label === "a") loadingA = false;
+      else loadingB = false;
+    }
+  }
 
   /** Extract just the filename from a full path */
   function filename(path: string): string {
@@ -167,6 +223,11 @@
         class:active={modeA === "database"}
         onclick={() => modeA = "database"}
       >Database</button>
+      <button
+        class="toggle-btn"
+        class:active={modeA === "remote"}
+        onclick={() => modeA = "remote"}
+      >Remote</button>
     </div>
 
     {#if modeA === "file"}
@@ -198,6 +259,55 @@
           </ul>
         </div>
       {/if}
+    {:else if modeA === "remote"}
+      <div class="remote-source">
+        <div class="field">
+          <label for="remote-uri-a">Remote URL</label>
+          <input id="remote-uri-a" type="text" bind:value={remoteUriA}
+            placeholder="s3://bucket/path/file.parquet or https://..." />
+        </div>
+
+        {#if needsCredentials(remoteUriA)}
+          <details class="credentials-section">
+            <summary>Credentials (optional — uses env/IAM if empty)</summary>
+            <div class="field">
+              <label for="access-key-a">Access Key</label>
+              <input id="access-key-a" type="text" bind:value={accessKeyA} placeholder="AWS_ACCESS_KEY_ID" />
+            </div>
+            <div class="field">
+              <label for="secret-key-a">Secret Key</label>
+              <input id="secret-key-a" type="password" bind:value={secretKeyA} placeholder="AWS_SECRET_ACCESS_KEY" />
+            </div>
+            <div class="field">
+              <label for="region-a">Region</label>
+              <input id="region-a" type="text" bind:value={regionA} placeholder="us-east-1" />
+            </div>
+            <div class="field">
+              <label for="endpoint-a">Endpoint (optional)</label>
+              <input id="endpoint-a" type="text" bind:value={endpointA} placeholder="For MinIO, R2, etc." />
+            </div>
+          </details>
+        {/if}
+
+        <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>
+          {loadingA ? "Loading..." : "Load Remote File"}
+        </button>
+
+        {#if errorA}
+          <p class="error">{errorA}</p>
+        {/if}
+
+        {#if metaA && modeA === "remote"}
+          <div class="meta">
+            <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
+            <ul class="columns">
+              {#each metaA.columns as col}
+                <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
     {/if}
@@ -216,6 +326,11 @@
         class:active={modeB === "database"}
         onclick={() => modeB = "database"}
       >Database</button>
+      <button
+        class="toggle-btn"
+        class:active={modeB === "remote"}
+        onclick={() => modeB = "remote"}
+      >Remote</button>
     </div>
 
     {#if modeB === "file"}
@@ -247,6 +362,55 @@
           </ul>
         </div>
       {/if}
+    {:else if modeB === "remote"}
+      <div class="remote-source">
+        <div class="field">
+          <label for="remote-uri-b">Remote URL</label>
+          <input id="remote-uri-b" type="text" bind:value={remoteUriB}
+            placeholder="s3://bucket/path/file.parquet or https://..." />
+        </div>
+
+        {#if needsCredentials(remoteUriB)}
+          <details class="credentials-section">
+            <summary>Credentials (optional — uses env/IAM if empty)</summary>
+            <div class="field">
+              <label for="access-key-b">Access Key</label>
+              <input id="access-key-b" type="text" bind:value={accessKeyB} placeholder="AWS_ACCESS_KEY_ID" />
+            </div>
+            <div class="field">
+              <label for="secret-key-b">Secret Key</label>
+              <input id="secret-key-b" type="password" bind:value={secretKeyB} placeholder="AWS_SECRET_ACCESS_KEY" />
+            </div>
+            <div class="field">
+              <label for="region-b">Region</label>
+              <input id="region-b" type="text" bind:value={regionB} placeholder="us-east-1" />
+            </div>
+            <div class="field">
+              <label for="endpoint-b">Endpoint (optional)</label>
+              <input id="endpoint-b" type="text" bind:value={endpointB} placeholder="For MinIO, R2, etc." />
+            </div>
+          </details>
+        {/if}
+
+        <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>
+          {loadingB ? "Loading..." : "Load Remote File"}
+        </button>
+
+        {#if errorB}
+          <p class="error">{errorB}</p>
+        {/if}
+
+        {#if metaB && modeB === "remote"}
+          <div class="meta">
+            <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
+            <ul class="columns">
+              {#each metaB.columns as col}
+                <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
@@ -400,6 +564,79 @@
     font-size: 0.85em;
   }
 
+  .remote-source {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .remote-source .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .remote-source .field label {
+    font-size: 0.8em;
+    font-weight: 500;
+    color: #666;
+  }
+
+  .remote-source .field input {
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.9em;
+    background: transparent;
+    color: inherit;
+  }
+
+  .remote-source .field input:focus {
+    outline: none;
+    border-color: #396cd8;
+  }
+
+  .credentials-section {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 8px;
+  }
+
+  .credentials-section summary {
+    cursor: pointer;
+    font-size: 0.8em;
+    color: #888;
+    user-select: none;
+  }
+
+  .credentials-section[open] summary {
+    margin-bottom: 8px;
+  }
+
+  .credentials-section .field {
+    margin-top: 6px;
+  }
+
+  .load-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: #396cd8;
+    color: white;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 500;
+  }
+
+  .load-btn:hover:not(:disabled) {
+    background: #2d5ab8;
+  }
+
+  .load-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   @media (prefers-color-scheme: dark) {
     .source-panel {
       border-color: #444;
@@ -425,6 +662,31 @@
 
     .browse-btn:hover:not(:disabled) {
       background: #4a4a4a;
+    }
+
+    .remote-source .field label {
+      color: #aaa;
+    }
+
+    .remote-source .field input {
+      border-color: #555;
+    }
+
+    .remote-source .field input:focus {
+      border-color: #6b9aff;
+    }
+
+    .credentials-section {
+      border-color: #444;
+    }
+
+    .load-btn {
+      background: #6b9aff;
+      color: #1a1a1a;
+    }
+
+    .load-btn:hover:not(:disabled) {
+      background: #5a89ee;
     }
   }
 </style>
