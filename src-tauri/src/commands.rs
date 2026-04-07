@@ -1067,6 +1067,167 @@ pub fn import_connections_from_file(
     let connections_path = connections::get_connections_path(&app_handle);
     connections::import_connections(&connections_path, &export_data).map_err(|e| e.to_string())
 }
+// ─── Catalog Browsing Commands ───────────────────────────────────────────────
+
+/// A catalog item returned by list_catalog (database, schema, or table name).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CatalogItem {
+    pub name: String,
+}
+
+/// List databases, schemas, or tables for a saved connection.
+///
+/// This enables the "Browse Tables" UI — cascading dropdowns that let users
+/// pick a table instead of typing SQL manually.
+///
+/// Supports SSH tunnels using the same pattern as load_from_saved_connection.
+#[tauri::command]
+pub async fn list_catalog(
+    connection_id: String,
+    catalog_type: String,
+    database: Option<String>,
+    schema: Option<String>,
+    app_handle: tauri::AppHandle,
+    state: State<'_, DuckDbState>,
+) -> Result<Vec<CatalogItem>, String> {
+    // Validate catalog_type
+    let valid_types = ["schemas", "tables", "databases"];
+    if !valid_types.contains(&catalog_type.as_str()) {
+        return Err(format!(
+            "Invalid catalog type '{}'. Must be one of: {}",
+            catalog_type,
+            valid_types.join(", ")
+        ));
+    }
+
+    // Look up the saved connection
+    let path = connections::get_connections_path(&app_handle);
+    let all_connections = connections::list_connections(&path).map_err(|e| e.to_string())?;
+    let saved = all_connections
+        .iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("Connection '{}' not found", connection_id))?;
+
+    // Retrieve password from keychain
+    let password = connections::get_password(&connection_id).map_err(|e| {
+        eprintln!("Keyring error: {}", e);
+        "Failed to retrieve stored password.".to_string()
+    })?;
+
+    // Snowflake uses its own REST API
+    if saved.db_type == "snowflake" {
+        let account_url = saved
+            .account_url
+            .as_deref()
+            .ok_or("Account URL is required for Snowflake connections")?;
+        let username = saved
+            .username
+            .as_deref()
+            .ok_or("Username is required for Snowflake connections")?;
+
+        let sf_config = snowflake::SnowflakeConfig {
+            account_url: account_url.to_string(),
+            warehouse: saved.warehouse.clone(),
+            role: saved.role.clone(),
+            database: saved.database.clone(),
+            schema: saved.schema.clone(),
+        };
+
+        let sf_auth = connections::build_snowflake_auth(saved, username, password.as_deref())
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+        let query = snowflake::build_snowflake_catalog_query(
+            &catalog_type,
+            database.as_deref(),
+            schema.as_deref(),
+        )
+        .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+        let names = snowflake::fetch_snowflake_metadata(sf_config, sf_auth, &query)
+            .await
+            .map_err(|e: DiffDonkeyError| {
+                let msg = e.to_string();
+                eprintln!("Snowflake catalog error: {}", msg);
+                if msg.contains("authentication") || msg.contains("401") {
+                    "Snowflake authentication failed. Check your credentials.".to_string()
+                } else {
+                    "Failed to browse catalog. Check the console for details.".to_string()
+                }
+            })?;
+
+        return Ok(names.into_iter().map(|name| CatalogItem { name }).collect());
+    }
+
+    // Postgres/MySQL path — uses DuckDB extensions
+
+    // If SSH tunneling is enabled, establish tunnel and rewrite host/port
+    let _tunnel: Option<crate::ssh_tunnel::SshTunnel>;
+    let effective_conn: connections::SavedConnection;
+
+    if saved.ssh_enabled {
+        let ssh_password = connections::get_ssh_password(&connection_id).map_err(|e| {
+            eprintln!("Keyring error (SSH): {}", e);
+            "Failed to retrieve stored SSH password.".to_string()
+        })?;
+
+        let tunnel_config = crate::ssh_tunnel::build_tunnel_config(saved, ssh_password)
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+        let tunnel = crate::ssh_tunnel::start_tunnel(&tunnel_config)
+            .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+        let mut tunneled = saved.clone();
+        tunneled.host = Some("127.0.0.1".to_string());
+        tunneled.port = Some(tunnel.local_port);
+        _tunnel = Some(tunnel);
+        effective_conn = tunneled;
+    } else {
+        _tunnel = None;
+        effective_conn = saved.clone();
+    }
+
+    // Build connection string
+    let conn_string = connections::build_connection_string(&effective_conn, password.as_deref());
+    if conn_string.trim().is_empty() {
+        return Err("Could not build connection string — check connection settings.".to_string());
+    }
+
+    // Determine database type
+    let db_type = match effective_conn.db_type.as_str() {
+        "postgres" => db_loader::DatabaseType::Postgres,
+        "mysql" => db_loader::DatabaseType::MySQL,
+        _ => {
+            return Err(format!(
+                "Database type '{}' not supported for catalog browsing",
+                effective_conn.db_type
+            ))
+        }
+    };
+
+    // Build and execute the metadata query
+    let query = db_loader::build_catalog_query(
+        &db_type,
+        &catalog_type,
+        database.as_deref(),
+        schema.as_deref(),
+    )
+    .map_err(|e: DiffDonkeyError| -> String { e.into() })?;
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    let names = db_loader::query_metadata(&conn, &db_type, &conn_string, &query).map_err(
+        |e: DiffDonkeyError| {
+            let msg = e.to_string();
+            eprintln!("Catalog query error: {}", msg);
+            "Failed to browse catalog. Check connection and permissions.".to_string()
+        },
+    )?;
+
+    // _tunnel is dropped here
+    Ok(names.into_iter().map(|name| CatalogItem { name }).collect())
+}
 
 // ─── Activity Log Commands ──────────────────────────────────────────────────
 

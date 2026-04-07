@@ -36,6 +36,7 @@ pub fn run() {
             commands::load_snowflake_source,
             commands::export_connections_to_file,
             commands::import_connections_from_file,
+            commands::list_catalog,
             commands::get_activity_log,
             commands::clear_activity_log,
             commands::get_query_history,

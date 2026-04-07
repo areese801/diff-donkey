@@ -679,6 +679,68 @@ pub async fn fetch_snowflake(
     client.execute_query(sql).await
 }
 
+/// Execute a Snowflake metadata query and return the first column as strings.
+///
+/// Used for catalog browsing (listing databases, schemas, tables).
+pub async fn fetch_snowflake_metadata(
+    config: SnowflakeConfig,
+    auth: SnowflakeAuth,
+    sql: &str,
+) -> Result<Vec<String>, DiffDonkeyError> {
+    if sql.trim().is_empty() {
+        return Err(DiffDonkeyError::Validation(
+            "Metadata query cannot be empty".to_string(),
+        ));
+    }
+
+    let client = SnowflakeClient::new(config, auth).await?;
+    let result = client.execute_query(sql).await?;
+
+    Ok(result
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(|v| v.clone()))
+        .collect())
+}
+
+/// Build a Snowflake catalog query for the given type.
+pub fn build_snowflake_catalog_query(
+    catalog_type: &str,
+    database: Option<&str>,
+    schema: Option<&str>,
+) -> Result<String, DiffDonkeyError> {
+    match catalog_type {
+        "databases" => Ok(
+            "SHOW DATABASES".to_string(),
+        ),
+        "schemas" => {
+            let db = database.ok_or_else(|| {
+                DiffDonkeyError::Validation("Database is required to list schemas".to_string())
+            })?;
+            Ok(format!("SHOW SCHEMAS IN DATABASE \"{}\"", db.replace('"', "")))
+        }
+        "tables" => {
+            let db = database.ok_or_else(|| {
+                DiffDonkeyError::Validation("Database is required to list tables".to_string())
+            })?;
+            let sch = schema.ok_or_else(|| {
+                DiffDonkeyError::Validation("Schema is required to list tables".to_string())
+            })?;
+            Ok(format!(
+                "SELECT table_name FROM \"{}\".information_schema.tables \
+                 WHERE table_schema = '{}' AND table_type IN ('BASE TABLE', 'VIEW') \
+                 ORDER BY table_name",
+                db.replace('"', ""),
+                sch.replace('\'', "''")
+            ))
+        }
+        _ => Err(DiffDonkeyError::Validation(format!(
+            "Invalid catalog type '{}' for Snowflake",
+            catalog_type
+        ))),
+    }
+}
+
 /// Load data from Snowflake into a local DuckDB table.
 ///
 /// Orchestrates: authenticate → execute query → load results → return metadata.
@@ -783,6 +845,83 @@ mod tests {
         assert_eq!(map_sf_type_to_duckdb("fixed"), "DOUBLE");
         assert_eq!(map_sf_type_to_duckdb("Boolean"), "BOOLEAN");
         assert_eq!(map_sf_type_to_duckdb("timestamp_ntz"), "TIMESTAMP");
+    }
+
+    // ─── Catalog Query Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_snowflake_catalog_query_databases() {
+        let sql = build_snowflake_catalog_query("databases", None, None).unwrap();
+        assert_eq!(sql, "SHOW DATABASES");
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_schemas() {
+        let sql = build_snowflake_catalog_query("schemas", Some("MY_DB"), None).unwrap();
+        assert!(sql.contains("SHOW SCHEMAS IN DATABASE"));
+        assert!(sql.contains("MY_DB"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_schemas_missing_database() {
+        let result = build_snowflake_catalog_query("schemas", None, None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Database is required"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_tables() {
+        let sql =
+            build_snowflake_catalog_query("tables", Some("MY_DB"), Some("PUBLIC")).unwrap();
+        assert!(sql.contains("MY_DB"));
+        assert!(sql.contains("table_schema = 'PUBLIC'"));
+        assert!(sql.contains("information_schema.tables"));
+        assert!(sql.contains("ORDER BY table_name"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_tables_missing_schema() {
+        let result = build_snowflake_catalog_query("tables", Some("MY_DB"), None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Schema is required"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_tables_missing_database() {
+        let result = build_snowflake_catalog_query("tables", None, Some("PUBLIC"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Database is required"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_type_validation() {
+        let result = build_snowflake_catalog_query("invalid", None, None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid catalog type"));
+    }
+
+    #[test]
+    fn test_snowflake_catalog_query_sql_injection_protection() {
+        let sql = build_snowflake_catalog_query(
+            "tables",
+            Some("MY_DB"),
+            Some("PUBLIC'; DROP TABLE x; --"),
+        )
+        .unwrap();
+        // Single quotes should be escaped
+        assert!(sql.contains("PUBLIC''; DROP TABLE x; --"));
     }
 
     #[test]
