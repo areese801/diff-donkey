@@ -75,7 +75,6 @@
 
   // --- Tolerance / Ignore state ---
 
-  let ignoreCase = $state(false);
   let whereClause = $state("");
   let perColumnMode: Record<string, string> = $state({});
   let perColumnValue: Record<string, string> = $state({});
@@ -152,17 +151,6 @@
       }
     }
 
-    // Apply global case-insensitive toggle to string columns not already overridden
-    if (ignoreCase) {
-      for (const col of sharedColumns) {
-        if (selectedPks.includes(col.name)) continue;
-        if (col.name in colTols || ignoredCols.includes(col.name)) continue;
-        if (isStringType(col.type_a)) {
-          colTols[col.name] = { mode: "case_insensitive" };
-        }
-      }
-    }
-
     const hasTols = Object.keys(colTols).length > 0;
     const trimmedWhere = whereClause.trim();
     const expr = pkMode === "expression" ? (pkExpression.trim() || null) : null;
@@ -176,10 +164,6 @@
   <div class="strip-header">
     <span class="strip-title">Diff Configuration</span>
     <div class="strip-controls">
-      <label class="global-toggle">
-        <input type="checkbox" bind:checked={ignoreCase} disabled={isLoading} />
-        Ignore Case
-      </label>
       <input
         class="where-input"
         type="text"
@@ -369,16 +353,6 @@
     display: flex;
     align-items: center;
     gap: 12px;
-  }
-
-  .global-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.8em;
-    cursor: pointer;
-    user-select: none;
-    white-space: nowrap;
   }
 
   .where-input {
