@@ -96,6 +96,15 @@ export interface DiffConfig {
 /** Supported database types for remote loading */
 export type DatabaseType = "postgres" | "mysql" | "snowflake";
 
+/** Credentials for accessing remote storage (S3, GCS) */
+export interface RemoteCredentials {
+  provider?: string | null;
+  access_key?: string | null;
+  secret_key?: string | null;
+  region?: string | null;
+  endpoint?: string | null;
+}
+
 /** Paginated row data returned from backend */
 export interface PagedRows {
   columns: string[];

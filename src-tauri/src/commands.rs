@@ -19,6 +19,7 @@ use crate::db_loader;
 use crate::diff;
 use crate::error::DiffDonkeyError;
 use crate::loader;
+use crate::remote_loader::{self, RemoteCredentials};
 use crate::snowflake;
 use crate::types::{
     ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
@@ -138,6 +139,42 @@ pub fn load_database_source(
             }
         },
     )
+}
+
+/// Load a remote file (S3, GCS, or HTTP URL) into DuckDB as source_a or source_b.
+///
+/// Uses DuckDB's httpfs extension to stream remote Parquet/CSV files directly.
+#[tauri::command]
+pub fn load_remote_source(
+    uri: String,
+    label: String,
+    credentials: Option<RemoteCredentials>,
+    state: State<DuckDbState>,
+    log: State<ActivityLog>,
+) -> Result<TableMeta, String> {
+    // SECURITY: Validate label is exactly "a" or "b"
+    if label != "a" && label != "b" {
+        return Err("Invalid label: must be 'a' or 'b'".to_string());
+    }
+
+    let table_name = format!("source_{}", label);
+    let creds = credentials.unwrap_or_default();
+
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+
+    remote_loader::load_remote(&conn, &uri, &table_name, &creds, &log)
+        .map_err(|e: DiffDonkeyError| {
+            let msg = e.to_string();
+            eprintln!("Remote load error: {}", msg);
+            if msg.contains("authentication") || msg.contains("credentials") || msg.contains("Access Denied") {
+                "Remote access failed. Check your credentials and permissions.".to_string()
+            } else {
+                e.into()
+            }
+        })
 }
 
 /// Compare schemas of the two loaded sources.

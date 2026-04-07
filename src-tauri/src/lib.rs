@@ -6,6 +6,7 @@ mod db_loader;
 mod diff;
 mod error;
 mod loader;
+mod remote_loader;
 pub mod snowflake;
 mod ssh_tunnel;
 mod types;
@@ -21,6 +22,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_source,
             commands::load_database_source,
+            commands::load_remote_source,
             commands::get_schema_comparison,
             commands::run_diff,
             commands::get_exclusive_rows,

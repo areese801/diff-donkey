@@ -6,7 +6,7 @@
  * changes, TypeScript will catch the mismatch at compile time.
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry } from "./types/diff";
+import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry, RemoteCredentials } from "./types/diff";
 import type { SavedConnection } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
@@ -67,6 +67,19 @@ export async function getDiffRows(
     pageSize,
     columnFilter: columnFilter ?? null,
     rowFilter: rowFilter ?? null,
+  });
+}
+
+/** Load a remote file (S3, GCS, HTTP) into DuckDB as source_a or source_b */
+export async function loadRemoteSource(
+  uri: string,
+  label: "a" | "b",
+  credentials?: RemoteCredentials | null,
+): Promise<TableMeta> {
+  return invoke<TableMeta>("load_remote_source", {
+    uri,
+    label,
+    credentials: credentials ?? null,
   });
 }
 
