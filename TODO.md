@@ -39,6 +39,15 @@
 - [ ] **Windows** — test saved connections with Windows Credential Manager
 - [ ] **Linux** — test saved connections with Secret Service (D-Bus)
 
+## UI Phase 2
+
+- [ ] **Collapsed config summary bar width shrinks** — should maintain full container width when collapsed
+- [ ] **Flatten database source screens** — Saved Connection, SQL Query, Import/Export are too vertical/stacked; make horizontal like file source rows
+- [ ] **Connections management** — consider moving to a proper app-level settings/config menu instead of inline
+- [ ] **Results tabs layout and visual treatment** — review after Phase 1 settles
+- [ ] **Color scheme and theming refinements**
+- [ ] **ColumnsTab redundancy** — slim down or repurpose (shared config strip already shows column info)
+
 ## Future / Research
 
 - [ ] **Snowflake-native diff engine** — push diff to Snowflake for 100M+ rows
