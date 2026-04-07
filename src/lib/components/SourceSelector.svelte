@@ -251,12 +251,7 @@
 
       {#if metaA && modeA === "file"}
         <div class="meta">
-          <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
-          <ul class="columns">
-            {#each metaA.columns as col}
-              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-            {/each}
-          </ul>
+          <p class="row-count"><strong>{metaA.row_count.toLocaleString()} rows</strong> &middot; {metaA.columns.length} columns</p>
         </div>
       {/if}
     {:else if modeA === "remote"}
@@ -354,12 +349,7 @@
 
       {#if metaB && modeB === "file"}
         <div class="meta">
-          <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
-          <ul class="columns">
-            {#each metaB.columns as col}
-              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-            {/each}
-          </ul>
+          <p class="row-count"><strong>{metaB.row_count.toLocaleString()} rows</strong> &middot; {metaB.columns.length} columns</p>
         </div>
       {/if}
     {:else if modeB === "remote"}

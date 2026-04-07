@@ -576,12 +576,7 @@
 
     {#if meta}
       <div class="meta">
-        <p class="row-count">{meta.row_count.toLocaleString()} rows</p>
-        <ul class="columns">
-          {#each meta.columns as col}
-            <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-          {/each}
-        </ul>
+        <p class="row-count"><strong>{meta.row_count.toLocaleString()} rows</strong> &middot; {meta.columns.length} columns</p>
       </div>
     {/if}
   {/if}
