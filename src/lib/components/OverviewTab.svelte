@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { OverviewResult } from "$lib/types/diff";
+  import { exportDiffRows } from "$lib/tauri";
+  import { save } from "@tauri-apps/plugin-dialog";
 
   interface Props {
     result: OverviewResult | null;
@@ -7,6 +9,43 @@
   }
 
   let { result, ignoredColumns = [] }: Props = $props();
+
+  let exportMessage: string | null = $state(null);
+  let exporting = $state(false);
+
+  async function handleExport() {
+    const filepath = await save({
+      filters: [
+        { name: "CSV", extensions: ["csv"] },
+        { name: "Parquet", extensions: ["parquet", "pq"] },
+        { name: "JSON", extensions: ["json"] },
+      ],
+    });
+    if (!filepath) return;
+
+    let format: "csv" | "parquet" | "json";
+    if (filepath.endsWith(".parquet") || filepath.endsWith(".pq")) {
+      format = "parquet";
+    } else if (filepath.endsWith(".json")) {
+      format = "json";
+    } else {
+      format = "csv";
+    }
+
+    exporting = true;
+    try {
+      const count = await exportDiffRows(filepath, format, undefined, "all");
+      const filename = filepath.split(/[/\\]/).pop() ?? filepath;
+      exportMessage = `Exported ${count.toLocaleString()} rows to ${filename}`;
+      setTimeout(() => { exportMessage = null; }, 3000);
+    } catch (e) {
+      console.error("Export error:", e);
+      exportMessage = `Export failed: ${e}`;
+      setTimeout(() => { exportMessage = null; }, 5000);
+    } finally {
+      exporting = false;
+    }
+  }
 
   /** Overall match percentage across all columns */
   let overallMatchPct = $derived(() => {
@@ -145,6 +184,18 @@
           {/each}
         </tbody>
       </table>
+      <div class="export-row">
+        <button
+          class="export-btn"
+          onclick={handleExport}
+          disabled={exporting}
+        >
+          {exporting ? "Exporting..." : "Export Results"}
+        </button>
+        {#if exportMessage}
+          <span class="export-message">{exportMessage}</span>
+        {/if}
+      </div>
     </section>
   </div>
 {/if}
@@ -341,6 +392,39 @@
     border-radius: 3px;
   }
 
+  .export-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .export-btn {
+    padding: 5px 12px;
+    border: 1px solid #ddd;
+    border-radius: 16px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.82em;
+    font-weight: 500;
+    color: inherit;
+  }
+
+  .export-btn:hover:not(:disabled) {
+    background: #f0f0f0;
+  }
+
+  .export-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .export-message {
+    font-size: 0.8em;
+    color: #27ae60;
+    white-space: nowrap;
+  }
+
   @media (prefers-color-scheme: dark) {
     .card {
       border-color: #444;
@@ -360,6 +444,14 @@
 
     .mini-bar {
       background: #3a3a3a;
+    }
+
+    .export-btn {
+      border-color: #555;
+    }
+
+    .export-btn:hover:not(:disabled) {
+      background: #383838;
     }
   }
 </style>

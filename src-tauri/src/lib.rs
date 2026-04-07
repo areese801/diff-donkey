@@ -26,6 +26,7 @@ pub fn run() {
             commands::get_exclusive_rows,
             commands::get_duplicate_pks,
             commands::get_diff_rows,
+            commands::export_diff_rows,
             commands::list_saved_connections,
             commands::save_connection,
             commands::delete_connection,
