@@ -917,22 +917,6 @@
     margin: 0 0 8px 0;
   }
 
-  .columns {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    font-size: 0.85em;
-  }
-
-  .columns li {
-    padding: 2px 0;
-  }
-
-  .type {
-    color: #888;
-    font-size: 0.85em;
-  }
-
   @media (prefers-color-scheme: dark) {
     select, input, textarea {
       border-color: #555;
