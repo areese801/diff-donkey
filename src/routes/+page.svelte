@@ -16,8 +16,16 @@
   let schemaComparison: SchemaComparison | null = $state(null);
   let diffError: string | null = $state(null);
   let activityOpen = $state(false);
+  let setupCollapsed = $state(false);
 
   let bothLoaded = $derived(!!$sourceA && !!$sourceB);
+
+  let setupSummary = $derived.by(() => {
+    if (!$sourceA || !$sourceB) return "";
+    const pkDisplay = $pkColumn || "none";
+    const colCount = schemaComparison?.shared.length ?? 0;
+    return `Source A (${$sourceA.row_count.toLocaleString()} rows) vs Source B (${$sourceB.row_count.toLocaleString()} rows) \u00B7 PK: ${pkDisplay} \u00B7 ${colCount} cols compared`;
+  });
   $effect(() => {
     if (bothLoaded) {
       fetchSchemaComparison();
@@ -57,6 +65,7 @@
       diffResult.set(result);
       diffPrecision.set(tolerance);
       ignoredColumnsStore.set(ignoredColumns);
+      setupCollapsed = true;
       if (isFirstRun) activeTab = "overview";
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
@@ -71,16 +80,33 @@
     <h1>Diff Donkey</h1>
     <p class="subtitle">Dataset comparison powered by DuckDB</p>
 
-    <SourceSelector />
+    {#if !bothLoaded}
+      <SourceSelector />
+    {/if}
 
     {#if bothLoaded}
-      <DiffConfigStrip
-        sourceA={$sourceA}
-        sourceB={$sourceB}
-        {schemaComparison}
-        onRunDiff={handleRunDiff}
-        isLoading={$isLoading}
-      />
+      <!-- Setup area: collapsible after diff runs -->
+      <div class="setup-section">
+        <button class="setup-handle" onclick={() => setupCollapsed = !setupCollapsed}>
+          <span class="handle-icon">{setupCollapsed ? "▶" : "▼"}</span>
+          {#if setupCollapsed}
+            <span class="setup-summary">{setupSummary}</span>
+          {:else}
+            <span class="setup-label">Configuration</span>
+          {/if}
+        </button>
+
+        {#if !setupCollapsed}
+          <SourceSelector />
+          <DiffConfigStrip
+            sourceA={$sourceA}
+            sourceB={$sourceB}
+            {schemaComparison}
+            onRunDiff={handleRunDiff}
+            isLoading={$isLoading}
+          />
+        {/if}
+      </div>
 
       <TabNav {activeTab} onTabChange={(tab) => activeTab = tab} />
 
@@ -135,6 +161,41 @@
     margin: 0 auto;
     padding: 24px 3%;
     flex: 1;
+  }
+
+  .setup-section {
+    margin-bottom: 16px;
+  }
+
+  .setup-handle {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #888;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .setup-handle:hover {
+    color: #555;
+    background: #f0f0f0;
+  }
+
+  .setup-summary {
+    font-weight: 400;
+    color: #666;
+  }
+
+  .setup-label {
+    font-weight: 600;
   }
 
   h1 {
@@ -220,6 +281,20 @@
     .activity-handle:hover {
       color: #ccc;
       background: #3a3a3a;
+    }
+
+    .setup-handle {
+      border-color: #444;
+      color: #999;
+    }
+
+    .setup-handle:hover {
+      color: #ccc;
+      background: #3a3a3a;
+    }
+
+    .setup-summary {
+      color: #aaa;
     }
   }
 </style>
