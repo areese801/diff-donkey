@@ -43,15 +43,17 @@
     columnTolerances: Record<string, import("$lib/types/diff").ColumnTolerance> | null,
     ignoredColumns: string[],
     whereClause: string | null,
+    pkExpression: string | null = null,
   ) {
     isLoading.set(true);
     diffError = null;
-    pkColumn.set(selectedPks.join(", "));
+    pkColumn.set(pkExpression ? `expr: ${pkExpression}` : selectedPks.join(", "));
 
     try {
       const isFirstRun = !$diffResult;
       const result = await runDiff({
         pk_columns: selectedPks,
+        pk_expression: pkExpression,
         tolerance,
         column_tolerances: columnTolerances,
         ignored_columns: ignoredColumns.length > 0 ? ignoredColumns : undefined,

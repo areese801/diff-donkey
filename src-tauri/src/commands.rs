@@ -22,7 +22,7 @@ use crate::loader;
 use crate::query_history::{self, QueryHistoryEntry};
 use crate::snowflake;
 use crate::types::{
-    ColumnTolerance, DiffConfig, OverviewResult, PagedRows, SchemaComparison, TableMeta,
+    ColumnTolerance, DiffConfig, OverviewResult, PagedRows, PkMode, SchemaComparison, TableMeta,
 };
 
 /// Maximum rows per page to prevent memory exhaustion via large page_size.
@@ -177,17 +177,45 @@ pub fn run_diff(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
 
-    let pk_columns = &config.pk_columns;
+    // Resolve PK mode: expression takes priority if provided
+    let has_expression = config
+        .pk_expression
+        .as_ref()
+        .map_or(false, |e| !e.trim().is_empty());
+    let has_columns = !config.pk_columns.is_empty();
 
-    // SECURITY: Validate each PK column exists in both source tables.
-    for pk in pk_columns {
-        validate_column_exists(&conn, "source_a", pk)?;
-        validate_column_exists(&conn, "source_b", pk)?;
-    }
-
-    if pk_columns.is_empty() {
-        return Err("At least one primary key column is required".to_string());
-    }
+    let pk_mode = if has_expression && has_columns {
+        return Err(
+            "Provide either pk_columns or pk_expression, not both".to_string()
+        );
+    } else if has_expression {
+        let expr = config.pk_expression.as_ref().unwrap().trim().to_string();
+        // Basic validation: reject semicolons to prevent multi-statement injection
+        if expr.contains(';') {
+            return Err("PK expression must not contain semicolons".to_string());
+        }
+        // Validate the expression by running it against both source tables
+        let test_sql = format!("SELECT ({}) FROM source_a LIMIT 0", expr);
+        conn.execute(&test_sql, []).map_err(|e| {
+            format!("Invalid PK expression against source_a: {}", e)
+        })?;
+        let test_sql_b = format!("SELECT ({}) FROM source_b LIMIT 0", expr);
+        conn.execute(&test_sql_b, []).map_err(|e| {
+            format!("Invalid PK expression against source_b: {}", e)
+        })?;
+        PkMode::Expression { expression: expr }
+    } else if has_columns {
+        // SECURITY: Validate each PK column exists in both source tables.
+        for pk in &config.pk_columns {
+            validate_column_exists(&conn, "source_a", pk)?;
+            validate_column_exists(&conn, "source_b", pk)?;
+        }
+        PkMode::Columns {
+            columns: config.pk_columns.clone(),
+        }
+    } else {
+        return Err("At least one primary key column or a PK expression is required".to_string());
+    };
 
     // Validate global precision (negative values are valid — ROUND(x, -1) rounds to nearest 10)
     // No range restriction needed; DuckDB handles all integer precision values.
@@ -209,13 +237,19 @@ pub fn run_diff(
         }
     }
 
+    // Get the raw PK column names for filtering shared columns
+    let pk_col_names: Vec<String> = match &pk_mode {
+        PkMode::Columns { columns } => columns.clone(),
+        PkMode::Expression { .. } => vec![], // expression doesn't exclude any columns
+    };
+
     // Get shared columns (excluding PKs and ignored columns) to compare
     let schema = diff::schema::compare_schemas(&conn).map_err(|e| e.to_string())?;
     let ignored = config.ignored_columns.unwrap_or_default();
     let compare_columns: Vec<String> = schema
         .shared
         .iter()
-        .filter(|c| !pk_columns.contains(&c.name) && !ignored.contains(&c.name))
+        .filter(|c| !pk_col_names.contains(&c.name) && !ignored.contains(&c.name))
         .map(|c| c.name.clone())
         .collect();
 
@@ -223,21 +257,21 @@ pub fn run_diff(
     let column_types: std::collections::HashMap<String, String> = schema
         .shared
         .iter()
-        .filter(|c| !pk_columns.contains(&c.name) && !ignored.contains(&c.name))
+        .filter(|c| !pk_col_names.contains(&c.name) && !ignored.contains(&c.name))
         .map(|c| (c.name.clone(), c.type_a.clone()))
         .collect();
 
-    // Store PK columns as JSON array in _diff_meta
-    let pk_json = serde_json::to_string(pk_columns).map_err(|e| e.to_string())?;
+    // Store PK mode as JSON in _diff_meta for later retrieval by get_exclusive_rows etc.
+    let pk_mode_json = serde_json::to_string(&pk_mode).map_err(|e| e.to_string())?;
     conn.execute(
         "CREATE OR REPLACE TEMPORARY TABLE _diff_meta AS SELECT ? as pk_columns",
-        [&pk_json],
+        [&pk_mode_json],
     )
     .map_err(|e| e.to_string())?;
 
     diff::stats::run_diff(
         &conn,
-        pk_columns,
+        &pk_mode,
         &compare_columns,
         &column_types,
         config.tolerance,
@@ -249,12 +283,22 @@ pub fn run_diff(
     .map_err(|e: DiffDonkeyError| e.into())
 }
 
-/// Helper: get PK column names from the stored diff metadata.
-fn get_pk_columns(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
+/// Helper: get PK mode from the stored diff metadata.
+///
+/// Handles both the new PkMode format and the legacy Vec<String> format
+/// (for backward compatibility with any in-flight sessions).
+fn get_pk_mode(conn: &duckdb::Connection) -> Result<PkMode, String> {
     let json_str: String = conn
         .query_row("SELECT pk_columns FROM _diff_meta", [], |row| row.get(0))
         .map_err(|_| "Diff not run yet — run diff first".to_string())?;
-    serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse PK columns: {}", e))
+
+    // Try parsing as PkMode first, fall back to legacy Vec<String>
+    if let Ok(mode) = serde_json::from_str::<PkMode>(&json_str) {
+        return Ok(mode);
+    }
+    let columns: Vec<String> =
+        serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse PK metadata: {}", e))?;
+    Ok(PkMode::Columns { columns })
 }
 
 /// Get exclusive rows — rows that exist only in one side.
@@ -271,9 +315,9 @@ pub fn get_exclusive_rows(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pks = get_pk_columns(&conn)?;
+    let pk_mode = get_pk_mode(&conn)?;
 
-    diff::keys::get_exclusive_rows(&conn, &side, &pks, page, page_size, &log)
+    diff::keys::get_exclusive_rows(&conn, &side, &pk_mode, page, page_size, &log)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
@@ -291,9 +335,9 @@ pub fn get_duplicate_pks(
         .conn
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
-    let pks = get_pk_columns(&conn)?;
+    let pk_mode = get_pk_mode(&conn)?;
 
-    diff::keys::get_duplicate_pks(&conn, &side, &pks, page, page_size, &log)
+    diff::keys::get_duplicate_pks(&conn, &side, &pk_mode, page, page_size, &log)
         .map_err(|e: DiffDonkeyError| e.into())
 }
 
