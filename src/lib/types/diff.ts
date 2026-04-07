@@ -114,3 +114,12 @@ export interface QueryLogEntry {
   rows_affected: number | null;
   error: string | null;
 }
+
+/** A query history entry — recently executed SQL stored per connection */
+export interface QueryHistoryEntry {
+  id: string;
+  connection_id: string | null;
+  query: string;
+  created_at: string;
+  last_used_at: string;
+}
