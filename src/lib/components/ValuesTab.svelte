@@ -171,12 +171,13 @@
         <button
           class="column-chip"
           class:active={selectedColumn === col.name}
-          class:has-diffs={col.diff_count > 0}
           onclick={() => selectedColumn = col.name}
           title="{col.name}: {col.match_pct.toFixed(1)}% match, {col.diff_count} diffs"
         >
           <span class="chip-name">{col.name}</span>
-          <span class="chip-count" class:chip-count-diffs={col.diff_count > 0}>{col.diff_count}</span>
+          {#if col.diff_count > 0}
+            <span class="chip-count-diffs">{col.diff_count}</span>
+          {/if}
         </button>
       {/each}
     </section>
@@ -381,41 +382,28 @@
     border-color: #396cd8;
   }
 
-  .column-chip.active .chip-count {
-    background: rgba(255,255,255,0.25);
+  .column-chip.active {
+    background: #396cd8;
     color: white;
-  }
-
-  .column-chip.has-diffs {
-    border-color: #e8b8b8;
-    background: #fdf0f0;
-    color: #c0392b;
-  }
-
-  .column-chip.has-diffs:hover {
-    background: #f8e0e0;
-  }
-
-  .column-chip.has-diffs.active {
-    background: #e74c3c;
-    color: white;
-    border-color: #e74c3c;
+    border-color: #396cd8;
   }
 
   .chip-name {
     letter-spacing: 0.2px;
   }
 
-  .chip-count {
-    font-size: 0.9em;
+  .chip-count-diffs {
+    font-size: 0.85em;
     padding: 0 4px;
     border-radius: 3px;
-    background: rgba(0,0,0,0.06);
-  }
-
-  .chip-count-diffs {
     background: rgba(231, 76, 60, 0.15);
     color: #c0392b;
+    font-weight: 700;
+  }
+
+  .column-chip.active .chip-count-diffs {
+    background: rgba(255,255,255,0.2);
+    color: white;
   }
 
   .row-filters {
@@ -563,19 +551,9 @@
       color: white;
     }
 
-    .column-chip.has-diffs {
-      background: #3a1a1a;
-      border-color: #6a3a3a;
+    .chip-count-diffs {
+      background: rgba(231, 76, 60, 0.2);
       color: #f08080;
-    }
-
-    .column-chip.has-diffs:hover {
-      background: #4a2020;
-    }
-
-    .column-chip.has-diffs.active {
-      background: #e74c3c;
-      color: white;
     }
 
     code {
