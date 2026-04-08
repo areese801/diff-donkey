@@ -39,6 +39,11 @@
 - [ ] **Windows** — test saved connections with Windows Credential Manager
 - [ ] **Linux** — test saved connections with Secret Service (D-Bus)
 
+## Remote Sources
+
+- [ ] **"Same as A" option for Source B credentials** — one-click to copy S3/GCS credentials from A to B
+- [ ] **Saved remote profiles** — save and recall S3/GCS credential sets (endpoint, access key, region) like database connections
+
 ## UI Phase 2
 
 - [ ] **Collapsed config summary bar width shrinks** — should maintain full container width when collapsed
