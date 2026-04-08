@@ -217,7 +217,7 @@
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.parquet or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
       {#if metaA && modeA === "remote"}
         <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
@@ -247,7 +247,7 @@
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.parquet or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
       {#if metaB && modeB === "remote"}
         <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
