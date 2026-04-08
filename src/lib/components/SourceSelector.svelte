@@ -223,7 +223,7 @@
         <button class="browse-btn" onclick={() => pickFile("a")} disabled={loadingA}>{loadingA ? "..." : "Browse"}</button>
       </div>
       {#if metaA && modeA === "file"}
-        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
@@ -231,21 +231,23 @@
       <button class="btn-icon" onclick={() => showCredsA = !showCredsA} title="Credentials">&#128273;</button>
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
       {#if metaA && modeA === "remote"}
-        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
-      {#if showCredsA}
-        <div class="creds-row">
-          <input class="cred-input" type="text" bind:value={accessKeyA} placeholder="Access Key" autocapitalize="off" />
-          <input class="cred-input" type="password" bind:value={secretKeyA} placeholder="Secret Key" />
-          <input class="cred-input" type="text" bind:value={regionA} placeholder="Region" autocapitalize="off" />
-          <input class="cred-input" type="text" bind:value={endpointA} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
-        </div>
-      {/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
     {/if}
   </div>
+
+  {#if modeA === "remote" && showCredsA}
+    <div class="creds-row">
+      <span class="creds-label">A creds:</span>
+      <input class="cred-input" type="text" bind:value={accessKeyA} placeholder="Access Key" autocapitalize="off" />
+      <input class="cred-input" type="password" bind:value={secretKeyA} placeholder="Secret Key" />
+      <input class="cred-input" type="text" bind:value={regionA} placeholder="Region" autocapitalize="off" />
+      <input class="cred-input" type="text" bind:value={endpointA} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
+    </div>
+  {/if}
 
   <!-- Source B row -->
   <div class="source-row source-row-right">
@@ -262,7 +264,7 @@
         <button class="browse-btn" onclick={() => pickFile("b")} disabled={loadingB}>{loadingB ? "..." : "Browse"}</button>
       </div>
       {#if metaB && modeB === "file"}
-        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
@@ -270,21 +272,23 @@
       <button class="btn-icon" onclick={() => showCredsB = !showCredsB} title="Credentials">&#128273;</button>
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
       {#if metaB && modeB === "remote"}
-        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
-      {#if showCredsB}
-        <div class="creds-row">
-          <input class="cred-input" type="text" bind:value={accessKeyB} placeholder="Access Key" autocapitalize="off" />
-          <input class="cred-input" type="password" bind:value={secretKeyB} placeholder="Secret Key" />
-          <input class="cred-input" type="text" bind:value={regionB} placeholder="Region" autocapitalize="off" />
-          <input class="cred-input" type="text" bind:value={endpointB} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
-        </div>
-      {/if}
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
   </div>
+
+  {#if modeB === "remote" && showCredsB}
+    <div class="creds-row">
+      <span class="creds-label">B creds:</span>
+      <input class="cred-input" type="text" bind:value={accessKeyB} placeholder="Access Key" autocapitalize="off" />
+      <input class="cred-input" type="password" bind:value={secretKeyB} placeholder="Secret Key" />
+      <input class="cred-input" type="text" bind:value={regionB} placeholder="Region" autocapitalize="off" />
+      <input class="cred-input" type="text" bind:value={endpointB} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -431,6 +435,10 @@
     white-space: nowrap;
   }
 
+  .meta-summary.loaded {
+    color: #27ae60;
+  }
+
   .btn-icon {
     padding: 3px 7px;
     border: 1px solid #ccc;
@@ -448,11 +456,19 @@
   }
 
   .creds-row {
-    width: 100%;
+    grid-column: 1 / -1;
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
     padding: 4px 0;
+  }
+
+  .creds-label {
+    font-size: 0.75em;
+    font-weight: 600;
+    color: #888;
+    white-space: nowrap;
   }
 
   .cred-input {
