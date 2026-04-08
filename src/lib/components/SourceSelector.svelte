@@ -261,9 +261,9 @@
 
 <style>
   .source-selector {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
   }
 
   .source-row {
