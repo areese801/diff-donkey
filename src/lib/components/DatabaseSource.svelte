@@ -342,241 +342,123 @@
   {#if showNewForm}
     <ConnectionForm connection={null} onClose={handleNewFormClose} />
   {:else}
-    <div class="field">
-      <label for="saved-conn-{label}">Saved Connection</label>
-      <div class="conn-select-row">
+    <!-- Primary row: connection + query + load -->
+    <div class="db-primary-row">
+      {#if !manualMode}
         <select
-          id="saved-conn-{label}"
+          class="conn-select"
           bind:value={selectedConnectionId}
           onchange={() => { manualMode = false; }}
         >
-          <option value="">-- Select a connection --</option>
+          <option value="">-- Connection --</option>
           {#each $savedConnections as conn (conn.id)}
             <option value={conn.id}>{conn.name} ({conn.db_type})</option>
           {/each}
         </select>
-        <button class="btn-small" onclick={() => (showNewForm = true)} title="New Connection">+</button>
-      </div>
-      <div class="conn-actions-row">
-        <button class="btn-small btn-subtle" onclick={handleImport} title="Import connections from file">Import</button>
-        <button class="btn-small btn-subtle" onclick={handleExport} title="Export connections to file">Export</button>
-      </div>
-      {#if importExportStatus}
-        <p class="import-export-status">{importExportStatus}</p>
-      {/if}
-    </div>
-
-    {#if selectedConnectionId}
-      {@const conn = selectedConnection()}
-      {#if conn}
-        <div class="conn-summary">
-          {#if conn.color}
-            <span class="color-dot" style="background: {conn.color}"></span>
-          {/if}
-          <span class="conn-summary-text">
-            {#if conn.db_type === "snowflake"}
-              {conn.account_url ?? ""}
-              {#if conn.warehouse} / {conn.warehouse}{/if}
-            {:else}
-              {conn.host ?? ""}
-              {#if conn.database} / {conn.database}{/if}
-            {/if}
-          </span>
-        </div>
-      {/if}
-
-      <div class="browse-section">
-        <button class="browse-toggle" onclick={handleBrowseToggle}>
-          {showBrowser ? "Hide Browser" : "Browse Tables"}
-        </button>
-
-        {#if showBrowser}
-          <div class="catalog-browser">
-            {#if conn && (conn.db_type === "snowflake" || conn.db_type === "mysql")}
-              <!-- Database dropdown (Snowflake + MySQL) -->
-              <div class="catalog-field">
-                <label for="cat-db-{label}">Database</label>
-                <select id="cat-db-{label}" bind:value={selectedDatabase} onchange={onDatabaseChange}>
-                  <option value="">-- Select database --</option>
-                  {#each databases as db}
-                    <option value={db}>{db}</option>
-                  {/each}
-                </select>
-              </div>
-            {/if}
-
-            {#if conn && conn.db_type !== "mysql"}
-              <!-- Schema dropdown (Postgres + Snowflake) -->
-              <div class="catalog-field">
-                <label for="cat-schema-{label}">Schema</label>
-                <select id="cat-schema-{label}" bind:value={selectedSchema} onchange={onSchemaChange}
-                  disabled={conn.db_type === "snowflake" && !selectedDatabase}>
-                  <option value="">-- Select schema --</option>
-                  {#each schemas as s}
-                    <option value={s}>{s}</option>
-                  {/each}
-                </select>
-              </div>
-            {/if}
-
-            <!-- Table dropdown (all types) -->
-            <div class="catalog-field">
-              <label for="cat-table-{label}">Table</label>
-              <select id="cat-table-{label}" bind:value={selectedTable} onchange={onTableSelect}
-                disabled={tables.length === 0}>
-                <option value="">-- Select table --</option>
-                {#each tables as t}
-                  <option value={t}>{t}</option>
-                {/each}
-              </select>
-            </div>
-
-            {#if catalogLoading}
-              <span class="catalog-loading">Loading...</span>
-            {/if}
-            {#if catalogError}
-              <p class="catalog-error">{catalogError}</p>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <div class="divider-row">
-      <span class="divider-line"></span>
-      <button
-        class="divider-toggle"
-        onclick={() => { manualMode = !manualMode; if (manualMode) selectedConnectionId = ""; }}
-      >
-        {manualMode ? "Use saved connection" : "Use connection string"}
-      </button>
-      <span class="divider-line"></span>
-    </div>
-
-    {#if manualMode}
-      <div class="field">
-        <label for="db-type-{label}">Database Type</label>
-        <select id="db-type-{label}" bind:value={dbType}>
-          <option value="postgres">PostgreSQL</option>
+        <button class="btn-icon" onclick={() => (showNewForm = true)} title="New Connection">+</button>
+      {:else}
+        <select class="db-type-select" bind:value={dbType}>
+          <option value="postgres">Postgres</option>
           <option value="mysql">MySQL</option>
           <option value="snowflake">Snowflake</option>
         </select>
-      </div>
+      {/if}
 
-      {#if dbType === "snowflake"}
-        <div class="field">
-          <label for="sf-account-{label}">Account URL</label>
-          <input id="sf-account-{label}" type="text" bind:value={sfAccountUrl} placeholder="https://myorg-myaccount.snowflakecomputing.com" />
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label for="sf-auth-{label}">Auth Method</label>
-            <select id="sf-auth-{label}" bind:value={sfAuthMethod}>
-              <option value="password">Password</option>
-              <option value="keypair">Key Pair</option>
-            </select>
+      <input
+        class="query-input"
+        type="text"
+        bind:value={query}
+        placeholder="SELECT * FROM my_table WHERE ..."
+      />
+
+      {#if history.length > 0}
+        <button class="btn-icon" onclick={toggleHistory} title="Query History">&#128337;</button>
+      {/if}
+
+      {#if selectedConnectionId}
+        <button class="btn-icon" onclick={handleBrowseToggle} title="Browse Tables">&#128269;</button>
+      {/if}
+
+      <button class="load-btn" onclick={handleLoad} disabled={loading}>
+        {loading ? "..." : "Load"}
+      </button>
+    </div>
+
+    <!-- Toggle: saved vs manual -->
+    <div class="mode-row">
+      <button class="link-btn" onclick={() => { manualMode = !manualMode; if (manualMode) selectedConnectionId = ""; }}>
+        {manualMode ? "Use saved connection" : "Use connection string"}
+      </button>
+      {#if meta}
+        <span class="meta-inline"><strong>{meta.row_count.toLocaleString()}</strong> rows &middot; {meta.columns.length} cols</span>
+      {/if}
+      {#if error}
+        <span class="error-inline">{error}</span>
+      {/if}
+    </div>
+
+    <!-- Expandable sections -->
+    {#if showHistory && history.length > 0}
+      <div class="history-dropdown">
+        {#each history as entry (entry.id)}
+          <div class="history-entry">
+            <button class="history-entry-btn" onclick={() => selectQuery(entry.query)} title={entry.query}>
+              <span class="history-query">{truncate(entry.query, 80)}</span>
+              <span class="history-time">{formatRelativeTime(entry.last_used_at)}</span>
+            </button>
+            <button class="history-delete" onclick={() => deleteEntry(entry.id)} title="Remove">&times;</button>
           </div>
-          <div class="field">
-            <label for="sf-user-{label}">Username</label>
-            <input id="sf-user-{label}" type="text" bind:value={sfUsername} placeholder="MYUSER" />
-          </div>
-        </div>
-        {#if sfAuthMethod === "password"}
-          <div class="field">
-            <label for="sf-pass-{label}">Password</label>
-            <input id="sf-pass-{label}" type="password" bind:value={sfPassword} placeholder="Enter password" />
-          </div>
-        {:else}
-          <div class="field">
-            <label for="sf-keyfile-{label}">Private Key (.p8 / .pem)</label>
-            <div class="key-file-row">
-              <button id="sf-keyfile-{label}" type="button" class="btn-small" onclick={handleSelectKeyFile}>Select Key File</button>
-              {#if sfPrivateKeyFilename}
-                <span class="key-filename">{sfPrivateKeyFilename}</span>
-              {/if}
-            </div>
-          </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if showBrowser && selectedConnectionId}
+      {@const conn = selectedConnection()}
+      {#if conn}
+      <div class="catalog-browser">
+        {#if conn.db_type === "snowflake" || conn.db_type === "mysql"}
+          <select class="cat-select" bind:value={selectedDatabase} onchange={onDatabaseChange}>
+            <option value="">-- Database --</option>
+            {#each databases as db}<option value={db}>{db}</option>{/each}
+          </select>
         {/if}
-        <div class="field-row">
-          <div class="field">
-            <label for="sf-wh-{label}">Warehouse</label>
-            <input id="sf-wh-{label}" type="text" bind:value={sfWarehouse} placeholder="COMPUTE_WH" />
-          </div>
-          <div class="field">
-            <label for="sf-role-{label}">Role</label>
-            <input id="sf-role-{label}" type="text" bind:value={sfRole} placeholder="SYSADMIN" />
-          </div>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label for="sf-db-{label}">Database</label>
-            <input id="sf-db-{label}" type="text" bind:value={sfDatabase} placeholder="MY_DB" />
-          </div>
-          <div class="field">
-            <label for="sf-schema-{label}">Schema</label>
-            <input id="sf-schema-{label}" type="text" bind:value={sfSchema} placeholder="PUBLIC" />
-          </div>
-        </div>
-      {:else}
-        <div class="field">
-          <label for="conn-{label}">Connection String</label>
+        {#if conn && conn.db_type !== "mysql"}
+          <select class="cat-select" bind:value={selectedSchema} onchange={onSchemaChange}
+            disabled={conn?.db_type === "snowflake" && !selectedDatabase}>
+            <option value="">-- Schema --</option>
+            {#each schemas as s}<option value={s}>{s}</option>{/each}
+          </select>
+        {/if}
+        <select class="cat-select" bind:value={selectedTable} onchange={onTableSelect} disabled={tables.length === 0}>
+          <option value="">-- Table --</option>
+          {#each tables as t}<option value={t}>{t}</option>{/each}
+        </select>
+        {#if catalogLoading}<span class="cat-loading">Loading...</span>{/if}
+        {#if catalogError}<span class="cat-error">{catalogError}</span>{/if}
+      </div>
+      {/if}
+    {/if}
+
+    {#if manualMode}
+      <div class="manual-fields">
+        {#if dbType === "snowflake"}
+          <input type="text" bind:value={sfAccountUrl} placeholder="Account URL" class="manual-input" />
+          <input type="text" bind:value={sfUsername} placeholder="Username" class="manual-input" />
+          <input type="password" bind:value={sfPassword} placeholder="Password" class="manual-input" />
+          <input type="text" bind:value={sfWarehouse} placeholder="Warehouse" class="manual-input" />
+          <input type="text" bind:value={sfRole} placeholder="Role" class="manual-input" />
+          <input type="text" bind:value={sfDatabase} placeholder="Database" class="manual-input" />
+          <input type="text" bind:value={sfSchema} placeholder="Schema" class="manual-input" />
+        {:else}
           <input
-            id="conn-{label}"
             type="password"
             bind:value={connString}
             placeholder={dbType === "postgres"
               ? "host=localhost port=5432 dbname=mydb user=me password=secret"
               : "host=localhost port=3306 user=me password=secret database=mydb"}
+            class="manual-input manual-input-wide"
           />
-        </div>
-      {/if}
-    {/if}
-
-    <div class="field">
-      <div class="query-label-row">
-        <label for="query-{label}">SQL Query</label>
-        {#if history.length > 0 || selectedConnectionId}
-          <button class="history-btn" onclick={toggleHistory}>
-            Recent{history.length > 0 ? ` (${history.length})` : ""}
-          </button>
         {/if}
-      </div>
-      {#if showHistory && history.length > 0}
-        <div class="history-dropdown">
-          {#each history as entry (entry.id)}
-            <div class="history-entry">
-              <button class="history-entry-btn" onclick={() => selectQuery(entry.query)} title={entry.query}>
-                <span class="history-query">{truncate(entry.query, 60)}</span>
-                <span class="history-time">{formatRelativeTime(entry.last_used_at)}</span>
-              </button>
-              <button class="history-delete" onclick={() => deleteEntry(entry.id)} title="Remove from history">&times;</button>
-            </div>
-          {/each}
-          <button class="history-clear" onclick={handleClearHistory}>Clear History</button>
-        </div>
-      {/if}
-      {#if showHistory && history.length === 0}
-        <div class="history-dropdown history-empty">No query history yet.</div>
-      {/if}
-      <textarea
-        id="query-{label}"
-        bind:value={query}
-        placeholder="SELECT * FROM my_table WHERE ..."
-        rows="3"
-      ></textarea>
-    </div>
-
-    <button onclick={handleLoad} disabled={loading}>
-      {loading ? "Loading..." : "Load from Database"}
-    </button>
-
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
-
-    {#if meta}
-      <div class="meta">
-        <p class="row-count"><strong>{meta.row_count.toLocaleString()} rows</strong> &middot; {meta.columns.length} columns</p>
       </div>
     {/if}
   {/if}
@@ -586,213 +468,169 @@
   .db-source {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .field label {
-    font-size: 0.85em;
-    font-weight: 600;
-  }
-
-  .conn-select-row {
-    display: flex;
     gap: 6px;
+
   }
 
-  .conn-select-row select {
-    flex: 1;
-  }
-
-  .btn-small {
-    padding: 6px 12px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    background: transparent;
-    cursor: pointer;
-    font-size: 1em;
-    font-weight: 600;
-    color: inherit;
-  }
-
-  .btn-small:hover {
-    background: rgba(57, 108, 216, 0.1);
-  }
-
-  .conn-actions-row {
-    display: flex;
-    gap: 6px;
-  }
-
-  .btn-subtle {
-    font-size: 0.8em;
-    font-weight: 400;
-    padding: 4px 10px;
-    color: #888;
-    border-color: #ddd;
-  }
-
-  .import-export-status {
-    font-size: 0.8em;
-    color: #666;
-    margin: 0;
-  }
-
-  .conn-summary {
+  .db-primary-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    background: rgba(57, 108, 216, 0.05);
-    border-radius: 4px;
-    font-size: 0.85em;
-    color: #666;
+    gap: 6px;
+    flex-wrap: wrap;
   }
 
-  .browse-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .browse-toggle {
-    align-self: flex-start;
-    padding: 4px 10px;
-    border-radius: 4px;
+  .conn-select {
+    padding: 4px 8px;
     border: 1px solid #ccc;
-    background: transparent;
-    cursor: pointer;
+    border-radius: 4px;
     font-size: 0.8em;
+    background: white;
+    color: inherit;
+    min-width: 140px;
+  }
+
+  .db-type-select {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.8em;
+    background: white;
     color: inherit;
   }
 
-  .browse-toggle:hover {
-    background: rgba(57, 108, 216, 0.1);
+  .query-input {
+    flex: 1;
+    min-width: 180px;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-family: monospace;
+    background: white;
+    color: inherit;
+  }
+
+  .btn-icon {
+    padding: 3px 7px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.85em;
+    color: #888;
+    line-height: 1;
+  }
+
+  .btn-icon:hover {
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .load-btn {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 4px;
+    background: #396cd8;
+    color: white;
+    cursor: pointer;
+    font-size: 0.8em;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .load-btn:hover:not(:disabled) {
+    background: #2d5bbf;
+  }
+
+  .load-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .mode-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.75em;
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 1em;
+    padding: 0;
+    text-decoration: underline;
+  }
+
+  .link-btn:hover {
+    color: #396cd8;
+  }
+
+  .meta-inline {
+    color: #888;
+  }
+
+  .error-inline {
+    color: #e74c3c;
   }
 
   .catalog-browser {
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: 6px;
-    padding: 8px;
-    border: 1px solid #e0e0e0;
+    flex-wrap: wrap;
+    padding: 4px 0;
+  }
+
+  .cat-select {
+    padding: 3px 6px;
+    border: 1px solid #ccc;
     border-radius: 4px;
-    background: rgba(57, 108, 216, 0.02);
-  }
-
-  .catalog-field {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .catalog-field label {
     font-size: 0.8em;
-    font-weight: 600;
+    background: white;
+    color: inherit;
   }
 
-  .catalog-loading {
-    font-size: 0.8em;
+  .cat-loading {
+    font-size: 0.75em;
     color: #888;
-    font-style: italic;
   }
 
-  .catalog-error {
+  .cat-error {
+    font-size: 0.75em;
     color: #e74c3c;
-    font-size: 0.8em;
-    margin: 0;
   }
 
-  .color-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .divider-row {
+  .manual-fields {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
-  .divider-line {
+  .manual-input {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.8em;
+    background: white;
+    color: inherit;
+    min-width: 100px;
+  }
+
+  .manual-input-wide {
     flex: 1;
-    height: 1px;
-    background: #e0e0e0;
-  }
-
-  .divider-toggle {
-    background: none;
-    border: none;
-    font-size: 0.8em;
-    color: #888;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .divider-toggle:hover {
-    color: #396cd8;
-  }
-
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-
-  .key-file-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .key-filename {
-    font-size: 0.85em;
-    color: #888;
-    font-family: monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .query-label-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .history-btn {
-    all: unset;
-    font-size: 0.78em;
-    color: #888;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 3px;
-  }
-
-  .history-btn:hover {
-    color: #396cd8;
-    background: rgba(57, 108, 216, 0.08);
+    min-width: 300px;
   }
 
   .history-dropdown {
     border: 1px solid #ddd;
     border-radius: 4px;
-    max-height: 200px;
+    max-height: 160px;
     overflow-y: auto;
     background: inherit;
-    font-size: 0.85em;
-  }
-
-  .history-empty {
-    padding: 10px;
-    color: #999;
-    text-align: center;
+    font-size: 0.8em;
   }
 
   .history-entry {
@@ -811,7 +649,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 8px;
+    padding: 4px 8px;
     cursor: pointer;
     min-width: 0;
     gap: 8px;
@@ -838,10 +676,10 @@
 
   .history-delete {
     all: unset;
-    padding: 4px 8px;
+    padding: 2px 6px;
     cursor: pointer;
     color: #ccc;
-    font-size: 1.1em;
+    font-size: 1em;
     line-height: 1;
     flex-shrink: 0;
   }
@@ -850,107 +688,33 @@
     color: #e74c3c;
   }
 
-  .history-clear {
-    all: unset;
-    display: block;
-    width: 100%;
-    text-align: center;
-    padding: 6px;
-    font-size: 0.85em;
-    color: #999;
-    cursor: pointer;
-    border-top: 1px solid #eee;
-  }
-
-  .history-clear:hover {
-    color: #e74c3c;
-    background: rgba(231, 76, 60, 0.05);
-  }
-
-  select, input, textarea {
-    padding: 8px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    font-family: inherit;
-    font-size: 0.9em;
-    background: inherit;
-    color: inherit;
-  }
-
-  textarea {
-    resize: vertical;
-    font-family: monospace;
-  }
-
-  button {
-    width: 100%;
-    padding: 10px;
-    border-radius: 6px;
-    border: 2px solid #396cd8;
-    background: #396cd8;
-    color: white;
-    cursor: pointer;
-    font-size: 0.95em;
-  }
-
-  button:hover:not(:disabled) {
-    background: #2a5ab8;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .error {
-    color: #e74c3c;
-    font-size: 0.85em;
-    margin: 0;
-  }
-
-  .meta {
-    margin-top: 4px;
-  }
-
-  .row-count {
-    font-weight: 600;
-    margin: 0 0 8px 0;
-  }
-
   @media (prefers-color-scheme: dark) {
-    select, input, textarea {
+    .conn-select, .db-type-select, .query-input, .cat-select, .manual-input {
       border-color: #555;
+      background: #2a2a2a;
     }
 
-    button {
-      background: #24c8db;
-      border-color: #24c8db;
+    .btn-icon {
+      border-color: #555;
+      color: #999;
+    }
+
+    .btn-icon:hover {
+      color: #8ab4f8;
+      border-color: #8ab4f8;
+    }
+
+    .load-btn {
+      background: #6b9aff;
       color: #1a1a1a;
     }
 
-    button:hover:not(:disabled) {
-      background: #1db0c0;
-    }
-
-    .btn-small {
-      border-color: #555;
-    }
-
-    .btn-subtle {
-      color: #999;
-      border-color: #444;
-    }
-
-    .import-export-status {
+    .link-btn {
       color: #999;
     }
 
-    .divider-line {
-      background: #444;
-    }
-
-    .conn-summary {
-      background: rgba(107, 154, 255, 0.1);
+    .link-btn:hover {
+      color: #8ab4f8;
     }
 
     .history-dropdown {
@@ -963,19 +727,6 @@
 
     .history-delete {
       color: #666;
-    }
-
-    .history-clear {
-      border-top-color: #333;
-    }
-
-    .browse-toggle {
-      border-color: #555;
-    }
-
-    .catalog-browser {
-      border-color: #444;
-      background: rgba(107, 154, 255, 0.05);
     }
   }
 </style>
