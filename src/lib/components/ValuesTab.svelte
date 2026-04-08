@@ -169,16 +169,14 @@
       </button>
       {#each sortedStats as col}
         <button
-          class="column-row"
+          class="column-chip"
           class:active={selectedColumn === col.name}
+          class:has-diffs={col.diff_count > 0}
           onclick={() => selectedColumn = col.name}
           title="{col.name}: {col.match_pct.toFixed(1)}% match, {col.diff_count} diffs"
         >
-          <span class="col-dot" style="background: {col.diff_count > 0 ? '#e74c3c' : '#27ae60'}"></span>
-          <span class="col-label">{col.name}</span>
-          {#if col.diff_count > 0}
-            <span class="diff-badge has-diffs">{col.diff_count}</span>
-          {/if}
+          <span class="chip-name">{col.name}</span>
+          <span class="chip-count" class:chip-count-diffs={col.diff_count > 0}>{col.diff_count}</span>
         </button>
       {/each}
     </section>
@@ -337,16 +335,19 @@
   }
 
   .filter-btn {
-    padding: 4px 10px;
-    border: 1px solid #ddd;
-    border-radius: 16px;
-    background: transparent;
+    padding: 2px 8px;
+    border: 1px solid #b8cce8;
+    border-radius: 4px;
+    background: #dce8f8;
     cursor: pointer;
-    font-size: 0.82em;
-    font-weight: 600;
-    text-align: left;
-    color: inherit;
+    font-size: 0.75em;
+    font-weight: 700;
+    color: #396cd8;
     white-space: nowrap;
+  }
+
+  .filter-btn:hover {
+    background: #cddcf4;
   }
 
   .filter-btn.active {
@@ -355,53 +356,66 @@
     border-color: #396cd8;
   }
 
-  .column-row {
-    display: flex;
+  .column-chip {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid #ddd;
-    border-radius: 16px;
-    background: transparent;
+    gap: 5px;
+    padding: 2px 8px;
+    border: 1px solid #b8cce8;
+    border-radius: 4px;
+    background: #dce8f8;
     cursor: pointer;
-    text-align: left;
-    color: inherit;
-    font-size: 0.82em;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: #396cd8;
     white-space: nowrap;
   }
 
-  .column-row:hover {
-    background: #f0f0f0;
+  .column-chip:hover {
+    background: #cddcf4;
   }
 
-  .column-row.active {
+  .column-chip.active {
+    background: #396cd8;
+    color: white;
     border-color: #396cd8;
-    background: #f0f5ff;
   }
 
-  .col-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
+  .column-chip.active .chip-count {
+    background: rgba(255,255,255,0.25);
+    color: white;
   }
 
-  .col-label {
-    font-weight: 500;
+  .column-chip.has-diffs {
+    border-color: #e8b8b8;
+    background: #fdf0f0;
+    color: #c0392b;
   }
 
-  .diff-badge {
-    font-size: 0.7em;
-    padding: 1px 5px;
-    border-radius: 8px;
-    background: #f0f0f0;
-    font-weight: 600;
-    text-align: center;
+  .column-chip.has-diffs:hover {
+    background: #f8e0e0;
   }
 
-  .diff-badge.has-diffs {
-    background: #ffeaea;
-    color: #e74c3c;
+  .column-chip.has-diffs.active {
+    background: #e74c3c;
+    color: white;
+    border-color: #e74c3c;
+  }
+
+  .chip-name {
+    letter-spacing: 0.2px;
+  }
+
+  .chip-count {
+    font-size: 0.9em;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgba(0,0,0,0.06);
+  }
+
+  .chip-count-diffs {
+    background: rgba(231, 76, 60, 0.15);
+    color: #c0392b;
   }
 
   .row-filters {
@@ -534,21 +548,34 @@
       background: #383838;
     }
 
-    .column-row:hover {
-      background: #383838;
+    .column-chip {
+      background: #1a2a4a;
+      border-color: #3a5a8a;
+      color: #8ab4f8;
     }
 
-    .column-row.active {
-      border-color: #24c8db;
-      background: #1a2a30;
+    .column-chip:hover {
+      background: #253a5a;
     }
 
-    .diff-badge {
-      background: #3a3a3a;
+    .column-chip.active {
+      background: #396cd8;
+      color: white;
     }
 
-    .diff-badge.has-diffs {
+    .column-chip.has-diffs {
+      background: #3a1a1a;
+      border-color: #6a3a3a;
+      color: #f08080;
+    }
+
+    .column-chip.has-diffs:hover {
       background: #4a2020;
+    }
+
+    .column-chip.has-diffs.active {
+      background: #e74c3c;
+      color: white;
     }
 
     code {
