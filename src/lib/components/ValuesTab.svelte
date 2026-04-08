@@ -10,13 +10,13 @@
     precision?: number | null;
     result?: OverviewResult | null;
     schemaComparison?: SchemaComparison | null;
+    charDiffColumns?: Record<string, boolean>;
   }
 
-  let { columnStats, valuesSummary, precision = null, result = null, schemaComparison = null }: Props = $props();
+  let { columnStats, valuesSummary, precision = null, result = null, schemaComparison = null, charDiffColumns = {} }: Props = $props();
 
   let selectedColumn: string | null = $state(null);
   let rowFilter: string = $state("all");
-  let charDiffs = $state(true);
   let data: PagedRows | null = $state(null);
   let allRows: Record<string, unknown>[] = $state([]);
   let loading = $state(false);
@@ -252,11 +252,6 @@
         </button>
       {/if}
 
-      <label class="char-diff-toggle">
-        <input type="checkbox" bind:checked={charDiffs} />
-        Char diffs
-      </label>
-
       <button
         class="export-btn"
         onclick={handleExport}
@@ -296,7 +291,7 @@
         {loadingMore}
         {hasMore}
         highlightDiffs={true}
-        {charDiffs}
+        {charDiffColumns}
         {precision}
         {columnStats}
         {selectedColumn}
@@ -393,21 +388,6 @@
     background: #e67e22;
     color: white;
     border-color: #e67e22;
-  }
-
-  .char-diff-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.82em;
-    color: #888;
-    cursor: pointer;
-    margin-left: auto;
-    user-select: none;
-  }
-
-  .char-diff-toggle input {
-    cursor: pointer;
   }
 
   .export-btn {

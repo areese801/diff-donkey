@@ -14,6 +14,7 @@
   let activityOpen = $state(false);
   let setupCollapsed = $state(false);
   let showConnectionManager = $state(false);
+  let charDiffColumns: Record<string, boolean> = $state({});
 
   let bothLoaded = $derived(!!$sourceA && !!$sourceB);
 
@@ -113,6 +114,8 @@
               {schemaComparison}
               onRunDiff={handleRunDiff}
               isLoading={$isLoading}
+              {charDiffColumns}
+              onCharDiffChange={(cols) => charDiffColumns = cols}
             />
           </div>
         {/if}
@@ -128,6 +131,7 @@
         precision={$diffPrecision}
         result={$diffResult}
         {schemaComparison}
+        {charDiffColumns}
       />
     {/if}
   </main>

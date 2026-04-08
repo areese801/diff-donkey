@@ -6,6 +6,8 @@
     sourceB: TableMeta | null;
     schemaComparison: SchemaComparison | null;
     isLoading: boolean;
+    charDiffColumns?: Record<string, boolean>;
+    onCharDiffChange?: (columns: Record<string, boolean>) => void;
     onRunDiff: (
       pkColumns: string[],
       tolerance: number | null,
@@ -16,7 +18,7 @@
     ) => void;
   }
 
-  let { sourceA, sourceB, schemaComparison, isLoading, onRunDiff }: Props = $props();
+  let { sourceA, sourceB, schemaComparison, isLoading, charDiffColumns = {}, onCharDiffChange, onRunDiff }: Props = $props();
 
   // --- Column merging ---
 
@@ -78,7 +80,22 @@
   let whereClause = $state("");
   let perColumnMode: Record<string, string> = $state({});
   let perColumnValue: Record<string, string> = $state({});
+  let perColumnCharDiff: Record<string, boolean> = $state({});
   let error: string | null = $state(null);
+
+  // Initialize charDiff to true for all string columns
+  $effect(() => {
+    for (const col of sharedColumns) {
+      if (isStringType(col.type_a) && !(col.name in perColumnCharDiff)) {
+        perColumnCharDiff[col.name] = true;
+      }
+    }
+  });
+
+  function toggleCharDiff(name: string) {
+    perColumnCharDiff[name] = !perColumnCharDiff[name];
+    onCharDiffChange?.({ ...perColumnCharDiff });
+  }
 
   function toggleIgnore(name: string) {
     if (perColumnMode[name] === "ignore") {
@@ -281,6 +298,24 @@
                   {:else}
                     <span class="na">&mdash;</span>
                   {/if}
+                {:else}
+                  <span class="na">&mdash;</span>
+                {/if}
+              </td>
+            {/each}
+          </tr>
+          <!-- Char Diff row (string columns only) -->
+          <tr>
+            <td class="row-label">Char Diff</td>
+            {#each allColumns as col}
+              <td class="col-cell" class:dimmed={col.presence !== "shared"}>
+                {#if col.presence === "shared" && isStringType(col.type_a) && !selectedPks.includes(col.name) && perColumnMode[col.name] !== "ignore"}
+                  <input
+                    type="checkbox"
+                    checked={perColumnCharDiff[col.name] !== false}
+                    onchange={() => toggleCharDiff(col.name)}
+                    disabled={isLoading}
+                  />
                 {:else}
                   <span class="na">&mdash;</span>
                 {/if}

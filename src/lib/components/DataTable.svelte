@@ -9,14 +9,14 @@
     loadingMore?: boolean;
     hasMore?: boolean;
     highlightDiffs?: boolean;
-    charDiffs?: boolean;
+    charDiffColumns?: Record<string, boolean>;
     precision?: number | null;
     columnStats?: ColumnDiffStats[];
     selectedColumn?: string | null;
     onColumnSelect?: (col: string | null) => void;
   }
 
-  let { data, loading, onLoadMore, loadingMore = false, hasMore = false, highlightDiffs = false, charDiffs = true, precision = null, columnStats = [], selectedColumn = null, onColumnSelect }: Props = $props();
+  let { data, loading, onLoadMore, loadingMore = false, hasMore = false, highlightDiffs = false, charDiffColumns = {}, precision = null, columnStats = [], selectedColumn = null, onColumnSelect }: Props = $props();
 
   let tableWrapper: HTMLDivElement | undefined = $state(undefined);
 
@@ -176,7 +176,8 @@
               {@const isIgnored = highlightDiffs && (col.endsWith("_a") || col.endsWith("_b")) && row[isDiffCol] === undefined && row[isRawDiffCol] === undefined}
               {@const hasDiff = highlightDiffs && row[isDiffCol] === 1}
               {@const hasMinorDiff = highlightDiffs && row[isDiffCol] !== 1 && row[isRawDiffCol] === 1}
-              {@const parts = highlightDiffs && charDiffs && !isIgnored ? charDiffParts(row, col) : null}
+              {@const charDiffEnabled = charDiffColumns[baseCol] !== false}
+              {@const parts = highlightDiffs && charDiffEnabled && !isIgnored ? charDiffParts(row, col) : null}
               <td class:diff-cell={hasDiff} class:minor-diff-cell={hasMinorDiff} class:ignored-cell={isIgnored}>
                 {#if parts}
                   {#each parts as part}
