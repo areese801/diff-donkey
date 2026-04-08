@@ -3,7 +3,6 @@
   import { loadSource, loadRemoteSource } from "$lib/tauri";
   import { sourceA, sourceB } from "$lib/stores/config";
   import DatabaseSource from "$lib/components/DatabaseSource.svelte";
-  import ConnectionManager from "$lib/components/ConnectionManager.svelte";
   import type { TableMeta, RemoteCredentials } from "$lib/types/diff";
 
   type SourceMode = "file" | "database" | "remote";
@@ -19,7 +18,6 @@
   let errorB: string | null = $state(null);
   let loadingA = $state(false);
   let loadingB = $state(false);
-  let showConnectionManager = $state(false);
 
   /** Remote source state */
   let remoteUriA = $state("");
@@ -200,10 +198,6 @@
 </script>
 
 <div class="source-selector">
-  {#if showConnectionManager}
-    <ConnectionManager onClose={() => (showConnectionManager = false)} />
-  {/if}
-
   <!-- Source A row -->
   <div class="source-row">
     <span class="source-label">Source A</span>
@@ -231,7 +225,6 @@
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
-      <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
     {/if}
   </div>
 
@@ -286,22 +279,6 @@
     font-size: 0.85em;
     min-width: 60px;
     white-space: nowrap;
-  }
-
-  .manage-btn {
-    padding: 4px 10px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    background: transparent;
-    cursor: pointer;
-    font-size: 0.75em;
-    color: #888;
-    white-space: nowrap;
-  }
-
-  .manage-btn:hover {
-    color: #396cd8;
-    border-color: #396cd8;
   }
 
   .mode-toggle {

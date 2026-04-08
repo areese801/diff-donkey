@@ -44,9 +44,9 @@
 - [ ] **Collapsed config summary bar width shrinks** — should maintain full container width when collapsed
 - [ ] **Flatten database source screens** — Saved Connection, SQL Query, Import/Export are too vertical/stacked; make horizontal like file source rows
 - [ ] **Connections management** — consider moving to a proper app-level settings/config menu instead of inline
-- [ ] **Results tabs layout and visual treatment** — review after Phase 1 settles
+- [x] **Results tabs layout and visual treatment** — consolidated into single view (PR #16)
 - [ ] **Color scheme and theming refinements**
-- [ ] **ColumnsTab redundancy** — slim down or repurpose (shared config strip already shows column info)
+- [x] **ColumnsTab redundancy** — removed along with other dead tab components (PR #16)
 
 ## Future / Research
 

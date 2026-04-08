@@ -2,6 +2,7 @@
   import SourceSelector from "$lib/components/SourceSelector.svelte";
   import DiffConfigStrip from "$lib/components/DiffConfigStrip.svelte";
   import ValuesTab from "$lib/components/ValuesTab.svelte";
+  import ConnectionManager from "$lib/components/ConnectionManager.svelte";
   import ActivityTab from "$lib/components/ActivityTab.svelte";
   import { sourceA, sourceB } from "$lib/stores/config";
   import { diffResult, isLoading, pkColumn, diffPrecision, ignoredColumns as ignoredColumnsStore } from "$lib/stores/diff";
@@ -12,6 +13,7 @@
   let diffError: string | null = $state(null);
   let activityOpen = $state(false);
   let setupCollapsed = $state(false);
+  let showConnectionManager = $state(false);
 
   let bothLoaded = $derived(!!$sourceA && !!$sourceB);
 
@@ -72,8 +74,19 @@
 
 <div class="app-layout">
   <main class="container">
-    <h1>Diff Donkey</h1>
-    <p class="subtitle">Dataset comparison powered by DuckDB</p>
+    <div class="page-header">
+      <div>
+        <h1>Diff Donkey</h1>
+        <p class="subtitle">Dataset comparison powered by DuckDB</p>
+      </div>
+      <button class="settings-btn" onclick={() => showConnectionManager = true} title="Manage Connections">
+        &#9881;
+      </button>
+    </div>
+
+    {#if showConnectionManager}
+      <ConnectionManager onClose={() => showConnectionManager = false} />
+    {/if}
 
     {#if !bothLoaded}
       <SourceSelector />
@@ -201,9 +214,32 @@
     font-weight: 600;
   }
 
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
   h1 {
     margin: 0;
     font-size: 1.8em;
+  }
+
+  .settings-btn {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 1.2em;
+    color: #888;
+    line-height: 1;
+  }
+
+  .settings-btn:hover {
+    color: #396cd8;
+    border-color: #396cd8;
   }
 
   .subtitle {
@@ -284,6 +320,16 @@
     .activity-handle:hover {
       color: #ccc;
       background: #3a3a3a;
+    }
+
+    .settings-btn {
+      border-color: #555;
+      color: #999;
+    }
+
+    .settings-btn:hover {
+      color: #8ab4f8;
+      border-color: #8ab4f8;
     }
 
     .setup-section {
