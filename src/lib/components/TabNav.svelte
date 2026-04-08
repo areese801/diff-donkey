@@ -7,7 +7,7 @@
   let { activeTab, onTabChange }: Props = $props();
 
   const tabs = [
-    { id: "overview", label: "Overview" },
+    { id: "overview", label: "Summary" },
     { id: "columns", label: "Columns" },
     { id: "primary-keys", label: "Primary Keys" },
     { id: "values", label: "Values" },

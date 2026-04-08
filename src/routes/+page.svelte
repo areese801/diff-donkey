@@ -66,7 +66,7 @@
       diffPrecision.set(tolerance);
       ignoredColumnsStore.set(ignoredColumns);
       setupCollapsed = true;
-      if (isFirstRun) activeTab = "overview";
+      if (isFirstRun) activeTab = "values";
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
     } finally {
