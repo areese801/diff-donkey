@@ -22,6 +22,8 @@
   /** Remote source state */
   let remoteUriA = $state("");
   let remoteUriB = $state("");
+  let showCredsA = $state(false);
+  let showCredsB = $state(false);
   let accessKeyA = $state("");
   let accessKeyB = $state("");
   let secretKeyA = $state("");
@@ -218,11 +220,20 @@
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
       <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.parquet or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <button class="btn-icon" onclick={() => showCredsA = !showCredsA} title="Credentials">&#128273;</button>
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
       {#if metaA && modeA === "remote"}
         <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
+      {#if showCredsA}
+        <div class="creds-row">
+          <input class="cred-input" type="text" bind:value={accessKeyA} placeholder="Access Key" autocapitalize="off" />
+          <input class="cred-input" type="password" bind:value={secretKeyA} placeholder="Secret Key" />
+          <input class="cred-input" type="text" bind:value={regionA} placeholder="Region" autocapitalize="off" />
+          <input class="cred-input" type="text" bind:value={endpointA} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
+        </div>
+      {/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
     {/if}
@@ -248,11 +259,20 @@
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
       <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.parquet or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <button class="btn-icon" onclick={() => showCredsB = !showCredsB} title="Credentials">&#128273;</button>
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
       {#if metaB && modeB === "remote"}
         <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
+      {#if showCredsB}
+        <div class="creds-row">
+          <input class="cred-input" type="text" bind:value={accessKeyB} placeholder="Access Key" autocapitalize="off" />
+          <input class="cred-input" type="password" bind:value={secretKeyB} placeholder="Secret Key" />
+          <input class="cred-input" type="text" bind:value={regionB} placeholder="Region" autocapitalize="off" />
+          <input class="cred-input" type="text" bind:value={endpointB} placeholder="Endpoint (MinIO, R2)" autocapitalize="off" />
+        </div>
+      {/if}
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
@@ -401,6 +421,41 @@
     font-size: 0.8em;
     color: #888;
     white-space: nowrap;
+  }
+
+  .btn-icon {
+    padding: 3px 7px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.85em;
+    color: #888;
+    line-height: 1;
+  }
+
+  .btn-icon:hover {
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .creds-row {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 0;
+  }
+
+  .cred-input {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.8em;
+    background: white;
+    color: inherit;
+    min-width: 100px;
+    flex: 1;
   }
 
 
