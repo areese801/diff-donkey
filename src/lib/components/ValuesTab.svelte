@@ -112,11 +112,13 @@
           class="column-row"
           class:active={selectedColumn === col.name}
           onclick={() => selectedColumn = col.name}
+          title="{col.name}: {col.match_pct.toFixed(1)}% match, {col.diff_count} diffs"
         >
-          <ProgressBar matchPct={col.match_pct} label={col.name} />
-          <span class="diff-badge" class:has-diffs={col.diff_count > 0}>
-            {col.diff_count}
-          </span>
+          <span class="col-dot" style="background: {col.diff_count > 0 ? '#e74c3c' : '#27ae60'}"></span>
+          <span class="col-label">{col.name}</span>
+          {#if col.diff_count > 0}
+            <span class="diff-badge has-diffs">{col.diff_count}</span>
+          {/if}
         </button>
       {/each}
     </section>
@@ -217,19 +219,21 @@
 
   .column-bars {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: 4px;
   }
 
   .filter-btn {
-    padding: 6px 12px;
+    padding: 4px 10px;
     border: 1px solid #ddd;
-    border-radius: 6px;
+    border-radius: 16px;
     background: transparent;
     cursor: pointer;
-    font-size: 0.85em;
+    font-size: 0.82em;
+    font-weight: 600;
     text-align: left;
     color: inherit;
+    white-space: nowrap;
   }
 
   .filter-btn.active {
@@ -241,15 +245,16 @@
   .column-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border: 1px solid transparent;
-    border-radius: 6px;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid #ddd;
+    border-radius: 16px;
     background: transparent;
     cursor: pointer;
-    width: 100%;
     text-align: left;
     color: inherit;
+    font-size: 0.82em;
+    white-space: nowrap;
   }
 
   .column-row:hover {
@@ -261,13 +266,23 @@
     background: #f0f5ff;
   }
 
+  .col-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .col-label {
+    font-weight: 500;
+  }
+
   .diff-badge {
-    font-size: 0.75em;
-    padding: 2px 8px;
-    border-radius: 10px;
+    font-size: 0.7em;
+    padding: 1px 5px;
+    border-radius: 8px;
     background: #f0f0f0;
     font-weight: 600;
-    min-width: 30px;
     text-align: center;
   }
 
