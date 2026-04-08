@@ -128,7 +128,7 @@
                   title="{baseCol}: {stat.diff_count} diffs out of {stat.total} rows ({diffPct.toFixed(1)}%)"
                 >
                   {#if stat.diff_count > 0}
-                    {diffPct.toFixed(1)}% diff
+                    {diffPct.toFixed(1)}% diff ({stat.diff_count})
                   {:else}
                     <span class="stat-ok">&check;</span> match
                   {/if}
