@@ -5,7 +5,9 @@
   interface Props {
     data: PagedRows | null;
     loading: boolean;
-    onPageChange: (page: number) => void;
+    onLoadMore?: () => void;
+    loadingMore?: boolean;
+    hasMore?: boolean;
     highlightDiffs?: boolean;
     charDiffs?: boolean;
     precision?: number | null;
@@ -14,7 +16,18 @@
     onColumnSelect?: (col: string | null) => void;
   }
 
-  let { data, loading, onPageChange, highlightDiffs = false, charDiffs = true, precision = null, columnStats = [], selectedColumn = null, onColumnSelect }: Props = $props();
+  let { data, loading, onLoadMore, loadingMore = false, hasMore = false, highlightDiffs = false, charDiffs = true, precision = null, columnStats = [], selectedColumn = null, onColumnSelect }: Props = $props();
+
+  let tableWrapper: HTMLDivElement | undefined = $state(undefined);
+
+  function handleScroll(e: Event) {
+    if (!hasMore || loadingMore || !onLoadMore) return;
+    const el = e.target as HTMLElement;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+    if (nearBottom) {
+      onLoadMore();
+    }
+  }
 
   /** Map column base names to their diff stats */
   let statsMap = $derived.by(() => {
@@ -40,7 +53,6 @@
     return String(val);
   }
 
-  let totalPages = $derived(data ? Math.ceil(data.total / data.page_size) : 0);
   /** Columns to display (filter out is_diff_* and is_raw_diff_* columns) */
   let displayColumns = $derived(
     data?.columns.filter(c => !c.startsWith("is_diff_") && !c.startsWith("is_raw_diff_")) ?? []
@@ -109,7 +121,7 @@
 {:else if !data || data.rows.length === 0}
   <div class="empty">No data to display.</div>
 {:else}
-  <div class="data-table-wrapper">
+  <div class="data-table-wrapper" bind:this={tableWrapper} onscroll={handleScroll}>
     <table>
       <thead>
         {#if columnStats.length > 0}
@@ -184,28 +196,13 @@
       </tbody>
     </table>
 
-    <!-- Pagination -->
-    {#if totalPages > 1}
-      <div class="pagination">
-        <button
-          onclick={() => onPageChange(data!.page - 1)}
-          disabled={data!.page === 0}
-        >
-          Prev
-        </button>
-        <span>Page {data!.page + 1} of {totalPages} ({data!.total.toLocaleString()} rows)</span>
-        <button
-          onclick={() => onPageChange(data!.page + 1)}
-          disabled={data!.page >= totalPages - 1}
-        >
-          Next
-        </button>
-      </div>
-    {:else}
-      <div class="pagination">
-        <span>{data.total.toLocaleString()} rows</span>
-      </div>
-    {/if}
+    <!-- Footer -->
+    <div class="table-footer">
+      <span>{data.rows.length.toLocaleString()} of {data.total.toLocaleString()} rows</span>
+      {#if loadingMore}
+        <span class="loading-more">Loading more...</span>
+      {/if}
+    </div>
   </div>
 {/if}
 
@@ -217,7 +214,8 @@
   }
 
   .data-table-wrapper {
-    overflow-x: auto;
+    overflow: auto;
+    max-height: 70vh;
   }
 
   table {
@@ -349,29 +347,22 @@
     background: #ffe0a0;
   }
 
-  .pagination {
+  .table-footer {
     display: flex;
     align-items: center;
-    justify-content: center;
     gap: 12px;
-    padding: 12px;
-    font-size: 0.85em;
+    padding: 8px 12px;
+    font-size: 0.8em;
     color: #888;
+    position: sticky;
+    bottom: 0;
+    background: #f6f6f6;
+    border-top: 1px solid #eee;
   }
 
-  .pagination button {
-    padding: 4px 12px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    background: transparent;
-    cursor: pointer;
-    font-size: 0.9em;
-    color: inherit;
-  }
-
-  .pagination button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  .loading-more {
+    color: #396cd8;
+    font-weight: 500;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -406,8 +397,9 @@
       background: #7a6030;
     }
 
-    .pagination button {
-      border-color: #555;
+    .table-footer {
+      background: #333;
+      border-top-color: #444;
     }
   }
 </style>

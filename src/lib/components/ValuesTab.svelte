@@ -18,39 +18,82 @@
   let rowFilter: string = $state("all");
   let charDiffs = $state(true);
   let data: PagedRows | null = $state(null);
+  let allRows: Record<string, unknown>[] = $state([]);
   let loading = $state(false);
+  let loadingMore = $state(false);
+  let currentPage = $state(0);
+  let hasMore = $state(false);
   let exportMessage: string | null = $state(null);
   let exporting = $state(false);
   const PAGE_SIZE = 50;
 
-  /** Fetch diff rows when column selection, row filter, or diff results change */
-  $effect(() => {
-    // Read columnStats to establish dependency — re-fetch when diff is re-run
-    void columnStats;
-    // Trigger on selectedColumn and rowFilter changes
-    void rowFilter;
-    fetchData(0);
+  /** Combined data object with accumulated rows */
+  let combinedData = $derived.by(() => {
+    if (!data) return null;
+    return { ...data, rows: allRows };
   });
 
-  async function fetchData(page: number) {
+  /** Reset and fetch first page when filters change */
+  $effect(() => {
+    void columnStats;
+    void rowFilter;
+    void selectedColumn;
+    resetAndFetch();
+  });
+
+  async function resetAndFetch() {
+    allRows = [];
+    currentPage = 0;
+    hasMore = false;
     loading = true;
     try {
-      if (rowFilter === "exclusive_a") {
-        data = await getExclusiveRows("a", page, PAGE_SIZE);
-      } else if (rowFilter === "exclusive_b") {
-        data = await getExclusiveRows("b", page, PAGE_SIZE);
-      } else if (rowFilter === "duplicates_a") {
-        data = await getDuplicatePks("a", page, PAGE_SIZE);
-      } else if (rowFilter === "duplicates_b") {
-        data = await getDuplicatePks("b", page, PAGE_SIZE);
-      } else {
-        data = await getDiffRows(page, PAGE_SIZE, selectedColumn ?? undefined, rowFilter);
+      const result = await fetchPage(0);
+      if (result) {
+        data = result;
+        allRows = [...result.rows];
+        currentPage = 0;
+        hasMore = result.rows.length >= PAGE_SIZE && allRows.length < result.total;
       }
     } catch (e) {
       console.error("Values tab fetch error:", e);
       data = null;
+      allRows = [];
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    loadingMore = true;
+    try {
+      const nextPage = currentPage + 1;
+      const result = await fetchPage(nextPage);
+      if (result && result.rows.length > 0) {
+        allRows = [...allRows, ...result.rows];
+        currentPage = nextPage;
+        hasMore = allRows.length < result.total;
+      } else {
+        hasMore = false;
+      }
+    } catch (e) {
+      console.error("Values tab load more error:", e);
+    } finally {
+      loadingMore = false;
+    }
+  }
+
+  async function fetchPage(page: number): Promise<PagedRows | null> {
+    if (rowFilter === "exclusive_a") {
+      return await getExclusiveRows("a", page, PAGE_SIZE);
+    } else if (rowFilter === "exclusive_b") {
+      return await getExclusiveRows("b", page, PAGE_SIZE);
+    } else if (rowFilter === "duplicates_a") {
+      return await getDuplicatePks("a", page, PAGE_SIZE);
+    } else if (rowFilter === "duplicates_b") {
+      return await getDuplicatePks("b", page, PAGE_SIZE);
+    } else {
+      return await getDiffRows(page, PAGE_SIZE, selectedColumn ?? undefined, rowFilter);
     }
   }
 
@@ -247,9 +290,11 @@
         {/if}
       </h3>
       <DataTable
-        {data}
+        data={combinedData}
         {loading}
-        onPageChange={(page) => fetchData(page)}
+        onLoadMore={loadMore}
+        {loadingMore}
+        {hasMore}
         highlightDiffs={true}
         {charDiffs}
         {precision}
