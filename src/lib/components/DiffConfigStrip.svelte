@@ -82,6 +82,7 @@
   let perColumnValue: Record<string, string> = $state({});
   let perColumnCharDiff: Record<string, boolean> = $state({});
   let error: string | null = $state(null);
+  let showDetails = $state(false);
 
   // Initialize charDiff to true for all shared columns
   $effect(() => {
@@ -213,6 +214,7 @@
             {/each}
           </tr>
         </thead>
+        {#if showDetails}
         <tbody>
           <!-- Type row -->
           <tr>
@@ -323,12 +325,16 @@
             {/each}
           </tr>
         </tbody>
+        {/if}
       </table>
     </div>
   {/if}
 
   <!-- Footer -->
   <div class="strip-footer">
+    <button class="detail-toggle" onclick={() => showDetails = !showDetails}>
+      {showDetails ? "▼ Less" : "▶ Configure"}
+    </button>
     <div class="pk-mode-toggle">
       <button class="mode-btn" class:active={pkMode === "columns"} onclick={() => pkMode = "columns"} disabled={isLoading}>
         Columns
@@ -504,6 +510,21 @@
   }
 
   /* Footer */
+  .detail-toggle {
+    padding: 3px 10px;
+    border: 1px solid #b8cce8;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: #396cd8;
+  }
+
+  .detail-toggle:hover {
+    background: #dce8f8;
+  }
+
   .strip-footer {
     display: flex;
     align-items: center;
