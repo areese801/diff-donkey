@@ -576,12 +576,7 @@
 
     {#if meta}
       <div class="meta">
-        <p class="row-count">{meta.row_count.toLocaleString()} rows</p>
-        <ul class="columns">
-          {#each meta.columns as col}
-            <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-          {/each}
-        </ul>
+        <p class="row-count"><strong>{meta.row_count.toLocaleString()} rows</strong> &middot; {meta.columns.length} columns</p>
       </div>
     {/if}
   {/if}
@@ -920,22 +915,6 @@
   .row-count {
     font-weight: 600;
     margin: 0 0 8px 0;
-  }
-
-  .columns {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    font-size: 0.85em;
-  }
-
-  .columns li {
-    padding: 2px 0;
-  }
-
-  .type {
-    color: #888;
-    font-size: 0.85em;
   }
 
   @media (prefers-color-scheme: dark) {

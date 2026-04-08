@@ -1,10 +1,6 @@
 <script lang="ts">
   import SourceSelector from "$lib/components/SourceSelector.svelte";
-  import TabNav from "$lib/components/TabNav.svelte";
-  import DiffConfig from "$lib/components/DiffConfig.svelte";
-  import ColumnsTab from "$lib/components/ColumnsTab.svelte";
-  import OverviewTab from "$lib/components/OverviewTab.svelte";
-  import PrimaryKeysTab from "$lib/components/PrimaryKeysTab.svelte";
+  import DiffConfigStrip from "$lib/components/DiffConfigStrip.svelte";
   import ValuesTab from "$lib/components/ValuesTab.svelte";
   import ActivityTab from "$lib/components/ActivityTab.svelte";
   import { sourceA, sourceB } from "$lib/stores/config";
@@ -12,17 +8,19 @@
   import { getSchemaComparison, runDiff } from "$lib/tauri";
   import type { SchemaComparison } from "$lib/types/diff";
 
-  let activeTab = $state("columns");
   let schemaComparison: SchemaComparison | null = $state(null);
   let diffError: string | null = $state(null);
   let activityOpen = $state(false);
+  let setupCollapsed = $state(false);
 
   let bothLoaded = $derived(!!$sourceA && !!$sourceB);
-  let sharedColumns = $derived(schemaComparison?.shared.map(c => ({
-    name: c.name,
-    data_type: c.type_a,
-  })) ?? []);
 
+  let setupSummary = $derived.by(() => {
+    if (!$sourceA || !$sourceB) return "";
+    const pkDisplay = $pkColumn || "none";
+    const colCount = schemaComparison?.shared.length ?? 0;
+    return `Source A (${$sourceA.row_count.toLocaleString()} rows) vs Source B (${$sourceB.row_count.toLocaleString()} rows) \u00B7 PK: ${pkDisplay} \u00B7 ${colCount} cols compared`;
+  });
   $effect(() => {
     if (bothLoaded) {
       fetchSchemaComparison();
@@ -62,7 +60,8 @@
       diffResult.set(result);
       diffPrecision.set(tolerance);
       ignoredColumnsStore.set(ignoredColumns);
-      if (isFirstRun) activeTab = "overview";
+      setupCollapsed = true;
+      // no-op: values tab is always visible
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -76,30 +75,47 @@
     <h1>Diff Donkey</h1>
     <p class="subtitle">Dataset comparison powered by DuckDB</p>
 
-    <SourceSelector />
+    {#if !bothLoaded}
+      <SourceSelector />
+    {/if}
 
     {#if bothLoaded}
-      <DiffConfig
-        columns={sharedColumns}
-        onRunDiff={handleRunDiff}
-        isLoading={$isLoading}
-      />
+      <!-- Setup area: collapsible after diff runs -->
+      <div class="setup-section" class:collapsed={setupCollapsed}>
+        <button class="setup-handle" onclick={() => setupCollapsed = !setupCollapsed}>
+          <span class="handle-icon">{setupCollapsed ? "▶" : "▼"}</span>
+          {#if setupCollapsed}
+            <span class="setup-summary">{setupSummary}</span>
+          {:else}
+            <span class="setup-label">Configuration</span>
+          {/if}
+        </button>
 
-      <TabNav {activeTab} onTabChange={(tab) => activeTab = tab} />
+        {#if !setupCollapsed}
+          <div class="setup-content">
+            <SourceSelector />
+            <DiffConfigStrip
+              sourceA={$sourceA}
+              sourceB={$sourceB}
+              {schemaComparison}
+              onRunDiff={handleRunDiff}
+              isLoading={$isLoading}
+            />
+          </div>
+        {/if}
+      </div>
 
       {#if diffError}
         <p class="error">{diffError}</p>
       {/if}
 
-      {#if activeTab === "overview"}
-        <OverviewTab result={$diffResult} ignoredColumns={$ignoredColumnsStore} />
-      {:else if activeTab === "columns"}
-        <ColumnsTab comparison={schemaComparison} />
-      {:else if activeTab === "primary-keys"}
-        <PrimaryKeysTab pkSummary={$diffResult?.pk_summary ?? null} />
-      {:else if activeTab === "values"}
-        <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} valuesSummary={$diffResult?.values_summary} precision={$diffPrecision} />
-      {/if}
+      <ValuesTab
+        columnStats={$diffResult?.diff_stats.columns ?? []}
+        valuesSummary={$diffResult?.values_summary}
+        precision={$diffPrecision}
+        result={$diffResult}
+        {schemaComparison}
+      />
     {/if}
   </main>
 
@@ -134,10 +150,54 @@
   }
 
   .container {
-    max-width: 1100px;
+    max-width: 1800px;
     margin: 0 auto;
-    padding: 24px;
+    padding: 24px 3%;
     flex: 1;
+  }
+
+  .setup-section {
+    margin-bottom: 16px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .setup-section.collapsed {
+    border-radius: 6px;
+  }
+
+  .setup-handle {
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: #f5f5f5;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #888;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .setup-handle:hover {
+    color: #555;
+    background: #eeeeee;
+  }
+
+  .setup-content {
+    padding: 12px;
+  }
+
+  .setup-summary {
+    font-weight: 400;
+    color: #666;
+  }
+
+  .setup-label {
+    font-weight: 600;
   }
 
   h1 {
@@ -223,6 +283,24 @@
     .activity-handle:hover {
       color: #ccc;
       background: #3a3a3a;
+    }
+
+    .setup-section {
+      border-color: #444;
+    }
+
+    .setup-handle {
+      background: #333;
+      color: #999;
+    }
+
+    .setup-handle:hover {
+      color: #ccc;
+      background: #3a3a3a;
+    }
+
+    .setup-summary {
+      color: #aaa;
     }
   }
 </style>

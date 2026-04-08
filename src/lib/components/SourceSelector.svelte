@@ -200,217 +200,66 @@
 </script>
 
 <div class="source-selector">
-  <div class="manage-row">
-    <button class="manage-btn" onclick={() => (showConnectionManager = true)}>
-      Manage Connections
-    </button>
-  </div>
-
   {#if showConnectionManager}
     <ConnectionManager onClose={() => (showConnectionManager = false)} />
   {/if}
 
-  <div class="source-panel">
-    <h3>Source A</h3>
+  <!-- Source A row -->
+  <div class="source-row">
+    <span class="source-label">Source A</span>
     <div class="mode-toggle">
-      <button
-        class="toggle-btn"
-        class:active={modeA === "file"}
-        onclick={() => modeA = "file"}
-      >File</button>
-      <button
-        class="toggle-btn"
-        class:active={modeA === "database"}
-        onclick={() => modeA = "database"}
-      >Database</button>
-      <button
-        class="toggle-btn"
-        class:active={modeA === "remote"}
-        onclick={() => modeA = "remote"}
-      >Remote</button>
+      <button class="toggle-btn" class:active={modeA === "file"} onclick={() => modeA = "file"}>File</button>
+      <button class="toggle-btn" class:active={modeA === "database"} onclick={() => modeA = "database"}>Database</button>
+      <button class="toggle-btn" class:active={modeA === "remote"} onclick={() => modeA = "remote"}>Remote</button>
     </div>
 
     {#if modeA === "file"}
       <div class="file-picker">
-        <input
-          type="text"
-          class="file-path"
-          value={pathA ? filename(pathA) : ""}
-          placeholder="No file selected"
-          readonly
-          title={pathA || "No file selected"}
-        />
-        <button class="browse-btn" onclick={() => pickFile("a")} disabled={loadingA}>
-          {loadingA ? "..." : "Browse"}
-        </button>
+        <input type="text" class="file-path" value={pathA ? filename(pathA) : ""} placeholder="No file selected" readonly title={pathA || "No file selected"} />
+        <button class="browse-btn" onclick={() => pickFile("a")} disabled={loadingA}>{loadingA ? "..." : "Browse"}</button>
       </div>
-
-      {#if errorA}
-        <p class="error">{errorA}</p>
-      {/if}
-
       {#if metaA && modeA === "file"}
-        <div class="meta">
-          <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
-          <ul class="columns">
-            {#each metaA.columns as col}
-              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-            {/each}
-          </ul>
-        </div>
+        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
+      {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
-      <div class="remote-source">
-        <div class="field">
-          <label for="remote-uri-a">Remote URL</label>
-          <input id="remote-uri-a" type="text" bind:value={remoteUriA}
-            placeholder="s3://bucket/path/file.parquet or https://..." />
-        </div>
-
-        {#if needsCredentials(remoteUriA)}
-          <details class="credentials-section">
-            <summary>Credentials (optional — uses env/IAM if empty)</summary>
-            <div class="field">
-              <label for="access-key-a">Access Key</label>
-              <input id="access-key-a" type="text" bind:value={accessKeyA} placeholder="AWS_ACCESS_KEY_ID" />
-            </div>
-            <div class="field">
-              <label for="secret-key-a">Secret Key</label>
-              <input id="secret-key-a" type="password" bind:value={secretKeyA} placeholder="AWS_SECRET_ACCESS_KEY" />
-            </div>
-            <div class="field">
-              <label for="region-a">Region</label>
-              <input id="region-a" type="text" bind:value={regionA} placeholder="us-east-1" />
-            </div>
-            <div class="field">
-              <label for="endpoint-a">Endpoint (optional)</label>
-              <input id="endpoint-a" type="text" bind:value={endpointA} placeholder="For MinIO, R2, etc." />
-            </div>
-          </details>
-        {/if}
-
-        <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>
-          {loadingA ? "Loading..." : "Load Remote File"}
-        </button>
-
-        {#if errorA}
-          <p class="error">{errorA}</p>
-        {/if}
-
-        {#if metaA && modeA === "remote"}
-          <div class="meta">
-            <p class="row-count">{metaA.row_count.toLocaleString()} rows</p>
-            <ul class="columns">
-              {#each metaA.columns as col}
-                <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-      </div>
+      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
+      {#if metaA && modeA === "remote"}
+        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+      {/if}
+      {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
+      <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
     {/if}
   </div>
 
-  <div class="source-panel">
-    <h3>Source B</h3>
+  <!-- Source B row -->
+  <div class="source-row">
+    <span class="source-label">Source B</span>
     <div class="mode-toggle">
-      <button
-        class="toggle-btn"
-        class:active={modeB === "file"}
-        onclick={() => modeB = "file"}
-      >File</button>
-      <button
-        class="toggle-btn"
-        class:active={modeB === "database"}
-        onclick={() => modeB = "database"}
-      >Database</button>
-      <button
-        class="toggle-btn"
-        class:active={modeB === "remote"}
-        onclick={() => modeB = "remote"}
-      >Remote</button>
+      <button class="toggle-btn" class:active={modeB === "file"} onclick={() => modeB = "file"}>File</button>
+      <button class="toggle-btn" class:active={modeB === "database"} onclick={() => modeB = "database"}>Database</button>
+      <button class="toggle-btn" class:active={modeB === "remote"} onclick={() => modeB = "remote"}>Remote</button>
     </div>
 
     {#if modeB === "file"}
       <div class="file-picker">
-        <input
-          type="text"
-          class="file-path"
-          value={pathB ? filename(pathB) : ""}
-          placeholder="No file selected"
-          readonly
-          title={pathB || "No file selected"}
-        />
-        <button class="browse-btn" onclick={() => pickFile("b")} disabled={loadingB}>
-          {loadingB ? "..." : "Browse"}
-        </button>
+        <input type="text" class="file-path" value={pathB ? filename(pathB) : ""} placeholder="No file selected" readonly title={pathB || "No file selected"} />
+        <button class="browse-btn" onclick={() => pickFile("b")} disabled={loadingB}>{loadingB ? "..." : "Browse"}</button>
       </div>
-
-      {#if errorB}
-        <p class="error">{errorB}</p>
-      {/if}
-
       {#if metaB && modeB === "file"}
-        <div class="meta">
-          <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
-          <ul class="columns">
-            {#each metaB.columns as col}
-              <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-            {/each}
-          </ul>
-        </div>
+        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
+      {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
-      <div class="remote-source">
-        <div class="field">
-          <label for="remote-uri-b">Remote URL</label>
-          <input id="remote-uri-b" type="text" bind:value={remoteUriB}
-            placeholder="s3://bucket/path/file.parquet or https://..." />
-        </div>
-
-        {#if needsCredentials(remoteUriB)}
-          <details class="credentials-section">
-            <summary>Credentials (optional — uses env/IAM if empty)</summary>
-            <div class="field">
-              <label for="access-key-b">Access Key</label>
-              <input id="access-key-b" type="text" bind:value={accessKeyB} placeholder="AWS_ACCESS_KEY_ID" />
-            </div>
-            <div class="field">
-              <label for="secret-key-b">Secret Key</label>
-              <input id="secret-key-b" type="password" bind:value={secretKeyB} placeholder="AWS_SECRET_ACCESS_KEY" />
-            </div>
-            <div class="field">
-              <label for="region-b">Region</label>
-              <input id="region-b" type="text" bind:value={regionB} placeholder="us-east-1" />
-            </div>
-            <div class="field">
-              <label for="endpoint-b">Endpoint (optional)</label>
-              <input id="endpoint-b" type="text" bind:value={endpointB} placeholder="For MinIO, R2, etc." />
-            </div>
-          </details>
-        {/if}
-
-        <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>
-          {loadingB ? "Loading..." : "Load Remote File"}
-        </button>
-
-        {#if errorB}
-          <p class="error">{errorB}</p>
-        {/if}
-
-        {#if metaB && modeB === "remote"}
-          <div class="meta">
-            <p class="row-count">{metaB.row_count.toLocaleString()} rows</p>
-            <ul class="columns">
-              {#each metaB.columns as col}
-                <li><code>{col.name}</code> <span class="type">{col.data_type}</span></li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-      </div>
+      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
+      {#if metaB && modeB === "remote"}
+        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+      {/if}
+      {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
@@ -419,26 +268,35 @@
 
 <style>
   .source-selector {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .manage-row {
-    grid-column: 1 / -1;
+  .source-row {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+  }
+
+  .source-label {
+    font-weight: 700;
+    font-size: 0.85em;
+    min-width: 60px;
+    white-space: nowrap;
   }
 
   .manage-btn {
-    padding: 4px 12px;
+    padding: 4px 10px;
     border-radius: 4px;
     border: 1px solid #ccc;
     background: transparent;
     cursor: pointer;
-    font-size: 0.8em;
+    font-size: 0.75em;
     color: #888;
+    white-space: nowrap;
   }
 
   .manage-btn:hover {
@@ -446,33 +304,20 @@
     border-color: #396cd8;
   }
 
-  .source-panel {
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 16px;
-  }
-
-  h3 {
-    margin: 0 0 12px 0;
-    font-size: 1.1em;
-  }
-
   .mode-toggle {
     display: flex;
     gap: 0;
-    margin-bottom: 12px;
     border: 1px solid #ccc;
-    border-radius: 6px;
+    border-radius: 4px;
     overflow: hidden;
   }
 
   .toggle-btn {
-    flex: 1;
-    padding: 6px 12px;
+    padding: 4px 10px;
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 0.85em;
+    font-size: 0.8em;
     font-weight: 500;
     color: inherit;
   }
@@ -490,22 +335,24 @@
     display: flex;
     gap: 0;
     border: 1px solid #ccc;
-    border-radius: 6px;
+    border-radius: 4px;
     overflow: hidden;
+    min-width: 180px;
   }
 
   .file-path {
     flex: 1;
-    padding: 8px 10px;
+    padding: 4px 8px;
     border: none;
     background: transparent;
-    font-size: 0.9em;
+    font-size: 0.85em;
     color: inherit;
     outline: none;
     cursor: default;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
+    min-width: 100px;
   }
 
   .file-path::placeholder {
@@ -513,12 +360,12 @@
   }
 
   .browse-btn {
-    padding: 8px 16px;
+    padding: 4px 10px;
     border: none;
     border-left: 1px solid #ccc;
     background: #f0f0f0;
     cursor: pointer;
-    font-size: 0.85em;
+    font-size: 0.8em;
     font-weight: 500;
     color: inherit;
     white-space: nowrap;
@@ -533,89 +380,48 @@
     cursor: not-allowed;
   }
 
-  .error {
-    color: #e74c3c;
-    font-size: 0.85em;
-    margin: 8px 0;
-  }
-
-  .meta {
-    margin-top: 12px;
-  }
-
-  .row-count {
-    font-weight: 600;
-    margin: 0 0 8px 0;
-  }
-
-  .columns {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    font-size: 0.85em;
-  }
-
-  .columns li {
-    padding: 2px 0;
-  }
-
-  .type {
-    color: #888;
-    font-size: 0.85em;
-  }
-
-  .remote-source {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .remote-source .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .remote-source .field label {
-    font-size: 0.8em;
-    font-weight: 500;
-    color: #666;
-  }
-
-  .remote-source .field input {
-    padding: 8px 10px;
+  .remote-uri {
+    padding: 4px 8px;
     border: 1px solid #ccc;
-    border-radius: 6px;
-    font-size: 0.9em;
-    background: transparent;
+    border-radius: 4px;
+    font-size: 0.85em;
     color: inherit;
+    background: transparent;
+    min-width: 200px;
+    flex: 1;
   }
 
-  .remote-source .field input:focus {
-    outline: none;
-    border-color: #396cd8;
-  }
-
-  .credentials-section {
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    padding: 8px;
-  }
-
-  .credentials-section summary {
+  .load-btn {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 4px;
+    background: #396cd8;
+    color: white;
     cursor: pointer;
     font-size: 0.8em;
+    font-weight: 500;
+  }
+
+  .load-btn:hover:not(:disabled) {
+    background: #2d5bbf;
+  }
+
+  .load-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .error {
+    color: #e74c3c;
+    font-size: 0.8em;
+  }
+
+  .meta-summary {
+    font-size: 0.8em;
     color: #888;
-    user-select: none;
+    white-space: nowrap;
   }
 
-  .credentials-section[open] summary {
-    margin-bottom: 8px;
-  }
-
-  .credentials-section .field {
-    margin-top: 6px;
-  }
 
   .load-btn {
     padding: 8px 16px;
@@ -638,10 +444,6 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    .source-panel {
-      border-color: #444;
-    }
-
     .mode-toggle {
       border-color: #555;
     }
@@ -664,20 +466,8 @@
       background: #4a4a4a;
     }
 
-    .remote-source .field label {
-      color: #aaa;
-    }
-
-    .remote-source .field input {
+    .remote-uri {
       border-color: #555;
-    }
-
-    .remote-source .field input:focus {
-      border-color: #6b9aff;
-    }
-
-    .credentials-section {
-      border-color: #444;
     }
 
     .load-btn {
