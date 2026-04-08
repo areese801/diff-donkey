@@ -158,30 +158,6 @@
       </section>
     {/if}
 
-    <!-- Per-column chips -->
-    <section class="column-bars">
-      <button
-        class="filter-btn"
-        class:active={selectedColumn === null}
-        onclick={() => selectedColumn = null}
-      >
-        All columns
-      </button>
-      {#each sortedStats as col}
-        <button
-          class="column-chip"
-          class:active={selectedColumn === col.name}
-          onclick={() => selectedColumn = col.name}
-          title="{col.name}: {col.match_pct.toFixed(1)}% match, {col.diff_count} diffs"
-        >
-          <span class="chip-name">{col.name}</span>
-          {#if col.diff_count > 0}
-            <span class="chip-count-diffs">{col.diff_count}</span>
-          {/if}
-        </button>
-      {/each}
-    </section>
-
     <!-- Row filter toggles -->
     <section class="row-filters">
       <button
@@ -277,6 +253,9 @@
         highlightDiffs={true}
         {charDiffs}
         {precision}
+        {columnStats}
+        {selectedColumn}
+        onColumnSelect={(col) => selectedColumn = col}
       />
     </section>
   </div>
@@ -327,83 +306,6 @@
   .stat-sep {
     color: #ccc;
     margin: 0 2px;
-  }
-
-  .column-bars {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .filter-btn {
-    padding: 2px 8px;
-    border: 1px solid #b8cce8;
-    border-radius: 4px;
-    background: #dce8f8;
-    cursor: pointer;
-    font-size: 0.75em;
-    font-weight: 700;
-    color: #396cd8;
-    white-space: nowrap;
-  }
-
-  .filter-btn:hover {
-    background: #cddcf4;
-  }
-
-  .filter-btn.active {
-    background: #396cd8;
-    color: white;
-    border-color: #396cd8;
-  }
-
-  .column-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 8px;
-    border: 1px solid #b8cce8;
-    border-radius: 4px;
-    background: #dce8f8;
-    cursor: pointer;
-    font-size: 0.75em;
-    font-weight: 600;
-    color: #396cd8;
-    white-space: nowrap;
-  }
-
-  .column-chip:hover {
-    background: #cddcf4;
-  }
-
-  .column-chip.active {
-    background: #396cd8;
-    color: white;
-    border-color: #396cd8;
-  }
-
-  .column-chip.active {
-    background: #396cd8;
-    color: white;
-    border-color: #396cd8;
-  }
-
-  .chip-name {
-    letter-spacing: 0.2px;
-  }
-
-  .chip-count-diffs {
-    font-size: 0.85em;
-    padding: 0 4px;
-    border-radius: 3px;
-    background: rgba(231, 76, 60, 0.15);
-    color: #c0392b;
-    font-weight: 700;
-  }
-
-  .column-chip.active .chip-count-diffs {
-    background: rgba(255,255,255,0.2);
-    color: white;
   }
 
   .row-filters {
@@ -504,16 +406,6 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    .filter-btn {
-      border-color: #555;
-    }
-
-    .filter-btn.active {
-      background: #24c8db;
-      color: #1a1a1a;
-      border-color: #24c8db;
-    }
-
     .row-filter-btn {
       border-color: #555;
     }
@@ -534,26 +426,6 @@
 
     .export-btn:hover:not(:disabled) {
       background: #383838;
-    }
-
-    .column-chip {
-      background: #1a2a4a;
-      border-color: #3a5a8a;
-      color: #8ab4f8;
-    }
-
-    .column-chip:hover {
-      background: #253a5a;
-    }
-
-    .column-chip.active {
-      background: #396cd8;
-      color: white;
-    }
-
-    .chip-count-diffs {
-      background: rgba(231, 76, 60, 0.2);
-      color: #f08080;
     }
 
     code {

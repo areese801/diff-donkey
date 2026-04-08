@@ -1,6 +1,6 @@
 <script lang="ts">
   import { diffChars } from "diff";
-  import type { PagedRows } from "$lib/types/diff";
+  import type { PagedRows, ColumnDiffStats } from "$lib/types/diff";
 
   interface Props {
     data: PagedRows | null;
@@ -9,9 +9,21 @@
     highlightDiffs?: boolean;
     charDiffs?: boolean;
     precision?: number | null;
+    columnStats?: ColumnDiffStats[];
+    selectedColumn?: string | null;
+    onColumnSelect?: (col: string | null) => void;
   }
 
-  let { data, loading, onPageChange, highlightDiffs = false, charDiffs = true, precision = null }: Props = $props();
+  let { data, loading, onPageChange, highlightDiffs = false, charDiffs = true, precision = null, columnStats = [], selectedColumn = null, onColumnSelect }: Props = $props();
+
+  /** Map column base names to their diff stats */
+  let statsMap = $derived.by(() => {
+    const map = new Map<string, ColumnDiffStats>();
+    for (const s of columnStats) {
+      map.set(s.name, s);
+    }
+    return map;
+  });
 
   /**
    * Format a cell value for display. When precision is set and the value
@@ -100,6 +112,36 @@
   <div class="data-table-wrapper">
     <table>
       <thead>
+        {#if columnStats.length > 0}
+          <tr class="stats-row">
+            {#each displayColumns as col}
+              {@const baseCol = col.replace(/_[ab]$/, '')}
+              {@const stat = statsMap.get(baseCol)}
+              {#if stat && col.endsWith("_a")}
+                <td
+                  class="stat-cell"
+                  class:stat-active={selectedColumn === baseCol}
+                  class:stat-has-diffs={stat.diff_count > 0}
+                  colspan="1"
+                  onclick={() => onColumnSelect?.(selectedColumn === baseCol ? null : baseCol)}
+                  title="{baseCol}: {stat.match_pct.toFixed(1)}% match"
+                >
+                  {#if stat.diff_count > 0}
+                    <span class="stat-count">{stat.diff_count}</span>
+                  {:else}
+                    <span class="stat-ok">&check;</span>
+                  {/if}
+                </td>
+              {:else if stat && col.endsWith("_b")}
+                <td class="stat-cell-spacer"></td>
+              {:else if col.startsWith("pk_")}
+                <td class="stat-cell-spacer"></td>
+              {:else}
+                <td class="stat-cell-spacer"></td>
+              {/if}
+            {/each}
+          </tr>
+        {/if}
         <tr>
           {#each displayColumns as col}
             {@const baseCol = col.replace(/_[ab]$/, '')}
@@ -191,6 +233,58 @@
     position: sticky;
     top: 0;
     background: #f6f6f6;
+  }
+
+  .stats-row {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .stat-cell {
+    text-align: center;
+    padding: 2px 6px;
+    font-size: 0.75em;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    background: #dce8f8;
+    border: 1px solid #b8cce8;
+    border-radius: 3px;
+    color: #396cd8;
+  }
+
+  .stat-cell:hover {
+    background: #cddcf4;
+  }
+
+  .stat-cell.stat-active {
+    background: #396cd8;
+    color: white;
+    border-color: #396cd8;
+  }
+
+  .stat-cell.stat-has-diffs {
+    color: #c0392b;
+  }
+
+  .stat-cell.stat-has-diffs.stat-active {
+    background: #396cd8;
+    color: white;
+  }
+
+  .stat-count {
+    color: inherit;
+  }
+
+  .stat-ok {
+    color: #27ae60;
+    font-size: 1.1em;
+  }
+
+  .stat-cell-spacer {
+    padding: 0;
+    border: none;
   }
 
   td {
