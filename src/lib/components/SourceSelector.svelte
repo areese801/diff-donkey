@@ -229,7 +229,7 @@
   </div>
 
   <!-- Source B row -->
-  <div class="source-row">
+  <div class="source-row source-row-right">
     <span class="source-label">Source B</span>
     <div class="mode-toggle">
       <button class="toggle-btn" class:active={modeB === "file"} onclick={() => modeB = "file"}>File</button>
@@ -272,6 +272,10 @@
     gap: 10px;
     padding: 6px 0;
     flex-wrap: wrap;
+  }
+
+  .source-row-right {
+    justify-content: flex-end;
   }
 
   .source-label {
