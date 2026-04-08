@@ -242,17 +242,22 @@
     z-index: 1;
   }
 
+  .stats-row td {
+    padding: 4px 4px 6px;
+  }
+
   .stat-cell {
     text-align: center;
-    padding: 2px 6px;
-    font-size: 0.75em;
+    padding: 3px 8px !important;
+    font-size: 0.7em;
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     background: #dce8f8;
     border: 1px solid #b8cce8;
-    border-radius: 3px;
+    border-radius: 4px;
     color: #396cd8;
+    letter-spacing: 0.3px;
   }
 
   .stat-cell:hover {
@@ -267,20 +272,26 @@
 
   .stat-cell.stat-has-diffs {
     color: #c0392b;
+    background: #fdf0f0;
+    border-color: #e8c8c8;
+  }
+
+  .stat-cell.stat-has-diffs:hover {
+    background: #f8e0e0;
   }
 
   .stat-cell.stat-has-diffs.stat-active {
     background: #396cd8;
     color: white;
+    border-color: #396cd8;
   }
 
   .stat-ok {
     color: #27ae60;
-    font-size: 1.1em;
   }
 
   .stat-cell-spacer {
-    padding: 0;
+    padding: 0 !important;
     border: none;
   }
 
