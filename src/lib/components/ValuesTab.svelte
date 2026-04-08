@@ -1,17 +1,18 @@
 <script lang="ts">
-  import ProgressBar from "./ProgressBar.svelte";
   import DataTable from "./DataTable.svelte";
-  import type { ColumnDiffStats, ValuesSummary, PagedRows } from "$lib/types/diff";
-  import { getDiffRows, exportDiffRows } from "$lib/tauri";
+  import type { ColumnDiffStats, ValuesSummary, OverviewResult, SchemaComparison, PagedRows } from "$lib/types/diff";
+  import { getDiffRows, getExclusiveRows, getDuplicatePks, exportDiffRows } from "$lib/tauri";
   import { save } from "@tauri-apps/plugin-dialog";
 
   interface Props {
     columnStats: ColumnDiffStats[];
     valuesSummary?: ValuesSummary;
     precision?: number | null;
+    result?: OverviewResult | null;
+    schemaComparison?: SchemaComparison | null;
   }
 
-  let { columnStats, valuesSummary, precision = null }: Props = $props();
+  let { columnStats, valuesSummary, precision = null, result = null, schemaComparison = null }: Props = $props();
 
   let selectedColumn: string | null = $state(null);
   let rowFilter: string = $state("all");
@@ -28,13 +29,23 @@
     void columnStats;
     // Trigger on selectedColumn and rowFilter changes
     void rowFilter;
-    fetchDiffRows(0);
+    fetchData(0);
   });
 
-  async function fetchDiffRows(page: number) {
+  async function fetchData(page: number) {
     loading = true;
     try {
-      data = await getDiffRows(page, PAGE_SIZE, selectedColumn ?? undefined, rowFilter);
+      if (rowFilter === "exclusive_a") {
+        data = await getExclusiveRows("a", page, PAGE_SIZE);
+      } else if (rowFilter === "exclusive_b") {
+        data = await getExclusiveRows("b", page, PAGE_SIZE);
+      } else if (rowFilter === "duplicates_a") {
+        data = await getDuplicatePks("a", page, PAGE_SIZE);
+      } else if (rowFilter === "duplicates_b") {
+        data = await getDuplicatePks("b", page, PAGE_SIZE);
+      } else {
+        data = await getDiffRows(page, PAGE_SIZE, selectedColumn ?? undefined, rowFilter);
+      }
     } catch (e) {
       console.error("Values tab fetch error:", e);
       data = null;
@@ -98,7 +109,56 @@
   <p class="empty">Run a diff to see value comparisons.</p>
 {:else}
   <div class="values-tab">
-    <!-- Per-column progress bars -->
+    <!-- Summary stats bar -->
+    {#if result}
+      <section class="stats-bar">
+        <span class="stat">
+          <strong>{result.total_rows_a.toLocaleString()}</strong> rows A
+        </span>
+        <span class="stat-sep">&middot;</span>
+        <span class="stat">
+          <strong>{result.total_rows_b.toLocaleString()}</strong> rows B
+        </span>
+        <span class="stat-sep">&middot;</span>
+        <span class="stat matched">
+          <strong>{result.values_summary.total_compared.toLocaleString()}</strong> matched
+        </span>
+        {#if result.pk_summary.exclusive_a > 0}
+          <span class="stat-sep">&middot;</span>
+          <span class="stat warn">
+            <strong>{result.pk_summary.exclusive_a}</strong> only in A
+          </span>
+        {/if}
+        {#if result.pk_summary.exclusive_b > 0}
+          <span class="stat-sep">&middot;</span>
+          <span class="stat warn">
+            <strong>{result.pk_summary.exclusive_b}</strong> only in B
+          </span>
+        {/if}
+        {#if result.pk_summary.duplicate_pks_a > 0 || result.pk_summary.duplicate_pks_b > 0}
+          <span class="stat-sep">&middot;</span>
+          <span class="stat warn">
+            <strong>{result.pk_summary.duplicate_pks_a + result.pk_summary.duplicate_pks_b}</strong> duplicate PKs
+          </span>
+        {/if}
+        {#if schemaComparison}
+          <span class="stat-sep">&middot;</span>
+          <span class="stat">
+            <strong>{schemaComparison.shared.length}</strong> shared cols
+          </span>
+          {#if schemaComparison.only_in_a.length > 0}
+            <span class="stat-sep">&middot;</span>
+            <span class="stat muted">{schemaComparison.only_in_a.length} only in A</span>
+          {/if}
+          {#if schemaComparison.only_in_b.length > 0}
+            <span class="stat-sep">&middot;</span>
+            <span class="stat muted">{schemaComparison.only_in_b.length} only in B</span>
+          {/if}
+        {/if}
+      </section>
+    {/if}
+
+    <!-- Per-column chips -->
     <section class="column-bars">
       <button
         class="filter-btn"
@@ -155,6 +215,25 @@
         Same ({filterCounts().same.toLocaleString()})
       </button>
 
+      {#if result && result.pk_summary.exclusive_a > 0}
+        <button
+          class="row-filter-btn pk-filter"
+          class:active={rowFilter === "exclusive_a"}
+          onclick={() => rowFilter = "exclusive_a"}
+        >
+          Only A ({result.pk_summary.exclusive_a})
+        </button>
+      {/if}
+      {#if result && result.pk_summary.exclusive_b > 0}
+        <button
+          class="row-filter-btn pk-filter"
+          class:active={rowFilter === "exclusive_b"}
+          onclick={() => rowFilter = "exclusive_b"}
+        >
+          Only B ({result.pk_summary.exclusive_b})
+        </button>
+      {/if}
+
       <label class="char-diff-toggle">
         <input type="checkbox" bind:checked={charDiffs} />
         Char diffs
@@ -195,7 +274,7 @@
       <DataTable
         {data}
         {loading}
-        onPageChange={(page) => fetchDiffRows(page)}
+        onPageChange={(page) => fetchData(page)}
         highlightDiffs={true}
         {charDiffs}
         {precision}
@@ -214,7 +293,41 @@
   .values-tab {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
+  }
+
+  .stats-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 2px;
+    font-size: 0.82em;
+    color: #666;
+    padding: 8px 12px;
+    background: #f8f8f8;
+    border-radius: 6px;
+    border: 1px solid #eee;
+  }
+
+  .stat strong {
+    color: #333;
+  }
+
+  .stat.matched strong {
+    color: #27ae60;
+  }
+
+  .stat.warn strong {
+    color: #e67e22;
+  }
+
+  .stat.muted {
+    color: #999;
+  }
+
+  .stat-sep {
+    color: #ccc;
+    margin: 0 2px;
   }
 
   .column-bars {
@@ -320,6 +433,17 @@
   .row-filter-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .pk-filter {
+    border-color: #e67e22;
+    color: #e67e22;
+  }
+
+  .pk-filter.active {
+    background: #e67e22;
+    color: white;
+    border-color: #e67e22;
   }
 
   .char-diff-toggle {

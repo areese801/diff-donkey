@@ -1,10 +1,6 @@
 <script lang="ts">
   import SourceSelector from "$lib/components/SourceSelector.svelte";
-  import TabNav from "$lib/components/TabNav.svelte";
   import DiffConfigStrip from "$lib/components/DiffConfigStrip.svelte";
-  import ColumnsTab from "$lib/components/ColumnsTab.svelte";
-  import OverviewTab from "$lib/components/OverviewTab.svelte";
-  import PrimaryKeysTab from "$lib/components/PrimaryKeysTab.svelte";
   import ValuesTab from "$lib/components/ValuesTab.svelte";
   import ActivityTab from "$lib/components/ActivityTab.svelte";
   import { sourceA, sourceB } from "$lib/stores/config";
@@ -12,7 +8,6 @@
   import { getSchemaComparison, runDiff } from "$lib/tauri";
   import type { SchemaComparison } from "$lib/types/diff";
 
-  let activeTab = $state("columns");
   let schemaComparison: SchemaComparison | null = $state(null);
   let diffError: string | null = $state(null);
   let activityOpen = $state(false);
@@ -66,7 +61,7 @@
       diffPrecision.set(tolerance);
       ignoredColumnsStore.set(ignoredColumns);
       setupCollapsed = true;
-      if (isFirstRun) activeTab = "values";
+      // no-op: values tab is always visible
     } catch (e) {
       diffError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -110,21 +105,17 @@
         {/if}
       </div>
 
-      <TabNav {activeTab} onTabChange={(tab) => activeTab = tab} />
-
       {#if diffError}
         <p class="error">{diffError}</p>
       {/if}
 
-      {#if activeTab === "overview"}
-        <OverviewTab result={$diffResult} ignoredColumns={$ignoredColumnsStore} />
-      {:else if activeTab === "columns"}
-        <ColumnsTab comparison={schemaComparison} />
-      {:else if activeTab === "primary-keys"}
-        <PrimaryKeysTab pkSummary={$diffResult?.pk_summary ?? null} />
-      {:else if activeTab === "values"}
-        <ValuesTab columnStats={$diffResult?.diff_stats.columns ?? []} valuesSummary={$diffResult?.values_summary} precision={$diffPrecision} />
-      {/if}
+      <ValuesTab
+        columnStats={$diffResult?.diff_stats.columns ?? []}
+        valuesSummary={$diffResult?.values_summary}
+        precision={$diffPrecision}
+        result={$diffResult}
+        {schemaComparison}
+      />
     {/if}
   </main>
 
