@@ -119,19 +119,23 @@
               {@const stat = statsMap.get(baseCol)}
               {#if stat && col.endsWith("_a")}
                 {@const diffPct = stat.total > 0 ? ((stat.diff_count / stat.total) * 100) : 0}
-                <td
-                  class="stat-cell"
-                  class:stat-active={selectedColumn === baseCol}
-                  class:stat-has-diffs={stat.diff_count > 0}
-                  colspan="2"
-                  onclick={() => onColumnSelect?.(selectedColumn === baseCol ? null : baseCol)}
-                  title="{baseCol}: {stat.diff_count} diffs out of {stat.total} rows ({diffPct.toFixed(1)}%)"
-                >
-                  {#if stat.diff_count > 0}
-                    {diffPct.toFixed(1)}% diff ({stat.diff_count})
-                  {:else}
-                    <span class="stat-ok">&check;</span> match
-                  {/if}
+                <td class="stat-cell-wrap" colspan="2">
+                  <span
+                    class="stat-badge"
+                    class:stat-active={selectedColumn === baseCol}
+                    class:stat-has-diffs={stat.diff_count > 0}
+                    onclick={() => onColumnSelect?.(selectedColumn === baseCol ? null : baseCol)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') onColumnSelect?.(selectedColumn === baseCol ? null : baseCol); }}
+                    title="{baseCol}: {stat.diff_count} diffs out of {stat.total} rows ({diffPct.toFixed(1)}%)"
+                    role="button"
+                    tabindex="0"
+                  >
+                    {#if stat.diff_count > 0}
+                      {diffPct.toFixed(1)}% diff ({stat.diff_count})
+                    {:else}
+                      <span class="stat-ok">&check;</span> match
+                    {/if}
+                  </span>
                 </td>
               {:else if stat && col.endsWith("_b")}
                 <!-- spanned by colspan=2 from _a cell -->
@@ -242,13 +246,16 @@
     z-index: 1;
   }
 
-  .stats-row td {
-    padding: 4px 4px 6px;
+  .stat-cell-wrap {
+    text-align: center;
+    padding: 2px 4px 4px !important;
+    background: transparent !important;
+    border: none !important;
   }
 
-  .stat-cell {
-    text-align: center;
-    padding: 3px 8px !important;
+  .stat-badge {
+    display: inline-block;
+    padding: 2px 10px;
     font-size: 0.7em;
     font-weight: 700;
     cursor: pointer;
@@ -260,27 +267,27 @@
     letter-spacing: 0.3px;
   }
 
-  .stat-cell:hover {
+  .stat-badge:hover {
     background: #cddcf4;
   }
 
-  .stat-cell.stat-active {
+  .stat-badge.stat-active {
     background: #396cd8;
     color: white;
     border-color: #396cd8;
   }
 
-  .stat-cell.stat-has-diffs {
+  .stat-badge.stat-has-diffs {
     color: #c0392b;
     background: #fdf0f0;
     border-color: #e8c8c8;
   }
 
-  .stat-cell.stat-has-diffs:hover {
+  .stat-badge.stat-has-diffs:hover {
     background: #f8e0e0;
   }
 
-  .stat-cell.stat-has-diffs.stat-active {
+  .stat-badge.stat-has-diffs.stat-active {
     background: #396cd8;
     color: white;
     border-color: #396cd8;
@@ -292,7 +299,8 @@
 
   .stat-cell-spacer {
     padding: 0 !important;
-    border: none;
+    border: none !important;
+    background: transparent !important;
   }
 
   td {
