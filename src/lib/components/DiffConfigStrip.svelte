@@ -83,10 +83,10 @@
   let perColumnCharDiff: Record<string, boolean> = $state({});
   let error: string | null = $state(null);
 
-  // Initialize charDiff to true for all string columns
+  // Initialize charDiff to true for all shared columns
   $effect(() => {
     for (const col of sharedColumns) {
-      if (isStringType(col.type_a) && !(col.name in perColumnCharDiff)) {
+      if (!(col.name in perColumnCharDiff)) {
         perColumnCharDiff[col.name] = true;
       }
     }
@@ -306,10 +306,10 @@
           </tr>
           <!-- Char Diff row (string columns only) -->
           <tr>
-            <td class="row-label">Char Diff</td>
+            <td class="row-label">Highlight</td>
             {#each allColumns as col}
               <td class="col-cell" class:dimmed={col.presence !== "shared"}>
-                {#if col.presence === "shared" && isStringType(col.type_a) && !selectedPks.includes(col.name) && perColumnMode[col.name] !== "ignore"}
+                {#if col.presence === "shared" && !selectedPks.includes(col.name) && perColumnMode[col.name] !== "ignore"}
                   <input
                     type="checkbox"
                     checked={perColumnCharDiff[col.name] !== false}
