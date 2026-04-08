@@ -234,14 +234,16 @@
     color: #888;
     white-space: nowrap;
     position: sticky;
-    top: 0;
+    top: 26px;
+    z-index: 2;
     background: #f6f6f6;
   }
 
   .stats-row {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
+    background: #f6f6f6;
   }
 
   .stat-cell-wrap {
@@ -366,6 +368,10 @@
   }
 
   @media (prefers-color-scheme: dark) {
+    .stats-row {
+      background: #2f2f2f;
+    }
+
     th {
       border-bottom-color: #444;
       background: #2f2f2f;
