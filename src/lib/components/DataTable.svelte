@@ -131,7 +131,7 @@
                     tabindex="0"
                   >
                     {#if stat.diff_count > 0}
-                      {diffPct.toFixed(1)}% diff ({stat.diff_count})
+                      {diffPct.toFixed(1)}% ({stat.diff_count}) diff
                     {:else}
                       <span class="stat-ok">&check;</span> match
                     {/if}
