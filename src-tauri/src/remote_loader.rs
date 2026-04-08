@@ -178,8 +178,18 @@ pub fn build_s3_credential_sql(creds: &RemoteCredentials) -> String {
         }
 
         if let Some(endpoint) = creds.endpoint.as_deref().filter(|e| !e.is_empty()) {
-            let endpoint = escape_sql_string(endpoint);
-            sql.push_str(&format!(",\n    ENDPOINT '{}'", endpoint));
+            // Strip http:// or https:// prefix — DuckDB expects host:port only
+            let use_ssl = endpoint.starts_with("https://");
+            let clean_endpoint = endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            let clean_endpoint = escape_sql_string(clean_endpoint);
+            sql.push_str(&format!(",\n    ENDPOINT '{}'", clean_endpoint));
+            sql.push_str(",\n    URL_STYLE 'path'");
+            if !use_ssl {
+                sql.push_str(",\n    USE_SSL false");
+            }
         }
 
         if let Some(style) = creds.url_style.as_deref().filter(|s| !s.is_empty()) {
