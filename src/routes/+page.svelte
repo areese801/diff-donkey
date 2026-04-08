@@ -161,6 +161,7 @@
     border: 1px solid #e0e0e0;
     border-radius: 8px;
     overflow: hidden;
+    width: 100%;
   }
 
   .setup-section.collapsed {
