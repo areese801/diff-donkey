@@ -118,22 +118,23 @@
               {@const baseCol = col.replace(/_[ab]$/, '')}
               {@const stat = statsMap.get(baseCol)}
               {#if stat && col.endsWith("_a")}
+                {@const diffPct = stat.total > 0 ? ((stat.diff_count / stat.total) * 100) : 0}
                 <td
                   class="stat-cell"
                   class:stat-active={selectedColumn === baseCol}
                   class:stat-has-diffs={stat.diff_count > 0}
-                  colspan="1"
+                  colspan="2"
                   onclick={() => onColumnSelect?.(selectedColumn === baseCol ? null : baseCol)}
-                  title="{baseCol}: {stat.match_pct.toFixed(1)}% match"
+                  title="{baseCol}: {stat.diff_count} diffs out of {stat.total} rows ({diffPct.toFixed(1)}%)"
                 >
                   {#if stat.diff_count > 0}
-                    <span class="stat-count">{stat.diff_count}</span>
+                    {diffPct.toFixed(1)}% diff
                   {:else}
-                    <span class="stat-ok">&check;</span>
+                    <span class="stat-ok">&check;</span> match
                   {/if}
                 </td>
               {:else if stat && col.endsWith("_b")}
-                <td class="stat-cell-spacer"></td>
+                <!-- spanned by colspan=2 from _a cell -->
               {:else if col.startsWith("pk_")}
                 <td class="stat-cell-spacer"></td>
               {:else}
@@ -271,10 +272,6 @@
   .stat-cell.stat-has-diffs.stat-active {
     background: #396cd8;
     color: white;
-  }
-
-  .stat-count {
-    color: inherit;
   }
 
   .stat-ok {
