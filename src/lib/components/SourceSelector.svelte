@@ -8,8 +8,12 @@
   type SourceMode = "file" | "database" | "remote";
 
   /** Current state for each source panel */
-  let modeA: SourceMode = $state("file");
-  let modeB: SourceMode = $state("file");
+  let modeA: SourceMode = $state((localStorage.getItem("diff-donkey:modeA") as SourceMode) ?? "file");
+  let modeB: SourceMode = $state((localStorage.getItem("diff-donkey:modeB") as SourceMode) ?? "file");
+
+  // Persist mode selection
+  $effect(() => { localStorage.setItem("diff-donkey:modeA", modeA); });
+  $effect(() => { localStorage.setItem("diff-donkey:modeB", modeB); });
   let pathA: string = $state(localStorage.getItem("diff-donkey:pathA") ?? "");
   let pathB: string = $state(localStorage.getItem("diff-donkey:pathB") ?? "");
   let metaA: TableMeta | null = $state(null);
@@ -20,8 +24,12 @@
   let loadingB = $state(false);
 
   /** Remote source state */
-  let remoteUriA = $state("");
-  let remoteUriB = $state("");
+  let remoteUriA = $state(localStorage.getItem("diff-donkey:remoteUriA") ?? "");
+  let remoteUriB = $state(localStorage.getItem("diff-donkey:remoteUriB") ?? "");
+
+  // Persist remote URIs
+  $effect(() => { localStorage.setItem("diff-donkey:remoteUriA", remoteUriA); });
+  $effect(() => { localStorage.setItem("diff-donkey:remoteUriB", remoteUriB); });
   let showCredsA = $state(false);
   let showCredsB = $state(false);
   let accessKeyA = $state("");
