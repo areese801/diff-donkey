@@ -18,16 +18,33 @@ pub enum RemoteFileType {
     Json,
 }
 
-/// Credentials for accessing remote storage (S3, GCS).
+/// Credentials for accessing remote storage (S3, GCS, private HTTPS).
 /// All fields are optional — when omitted, DuckDB uses credential chain
 /// (IAM roles, environment variables, instance metadata).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct RemoteCredentials {
+    #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
     pub access_key: Option<String>,
+    #[serde(default)]
     pub secret_key: Option<String>,
+    #[serde(default)]
     pub region: Option<String>,
+    #[serde(default)]
     pub endpoint: Option<String>,
+    /// AWS STS session token for temporary credentials
+    #[serde(default)]
+    pub session_token: Option<String>,
+    /// URL style for S3-compatible endpoints (`"path"` or `"vhost"`)
+    #[serde(default)]
+    pub url_style: Option<String>,
+    /// Override TLS for S3-compatible endpoints
+    #[serde(default)]
+    pub use_ssl: Option<bool>,
+    /// Bearer token for private HTTP/HTTPS endpoints
+    #[serde(default)]
+    pub bearer_token: Option<String>,
 }
 
 /// SECURITY: Escape a string for use in a SQL single-quoted literal.
@@ -36,22 +53,52 @@ fn escape_sql_string(s: &str) -> String {
 }
 
 /// Redact credential values for activity logging.
-/// Replaces key values with *** so secrets don't appear in the activity log.
+/// Replaces secret values with *** so they don't appear in the activity log.
+///
+/// Handles all occurrences of each keyword (not just the first) so that
+/// multi-secret statements are fully redacted. Also redacts bearer tokens
+/// embedded in EXTRA_HTTP_HEADERS.
 fn redact_credentials(sql: &str) -> String {
-    // Redact KEY_ID, SECRET, KEY values in CREATE SECRET statements
     let mut result = sql.to_string();
-    for keyword in &["KEY_ID", "SECRET", "KEY"] {
-        // Match pattern: KEY_ID 'value' -> KEY_ID '***'
-        if let Some(start) = result.find(&format!("{} '", keyword)) {
-            let key_prefix_len = keyword.len() + 2; // "KEY_ID '"
-            let after_key = start + key_prefix_len;
+    // KEY_ID 'v' / SECRET 'v' / SESSION_TOKEN 'v' / KEY 'v' → '***'
+    // Keywords processed in order; each needle has a trailing space + quote to
+    // avoid accidental overlap (e.g. KEY_ID does NOT match "KEY '").
+    for keyword in &["KEY_ID", "SECRET", "SESSION_TOKEN", "KEY"] {
+        let needle = format!("{} '", keyword);
+        let mut search_from = 0;
+        while let Some(rel) = result[search_from..].find(&needle) {
+            let start = search_from + rel;
+            let after_key = start + needle.len();
             if let Some(end_quote) = result[after_key..].find('\'') {
                 let end = after_key + end_quote;
                 result.replace_range(after_key..end, "***");
+                // Advance past the replacement to avoid re-matching.
+                search_from = after_key + 3;
+            } else {
+                break;
             }
         }
     }
-    result
+
+    // Redact bearer tokens: 'Bearer XYZ' → 'Bearer ***'
+    let needle = "'Bearer ";
+    let mut out = String::with_capacity(result.len());
+    let mut cursor = 0;
+    while let Some(rel) = result[cursor..].find(needle) {
+        let abs = cursor + rel;
+        let after = abs + needle.len();
+        match result[after..].find('\'') {
+            Some(end_rel) => {
+                let end = after + end_rel;
+                out.push_str(&result[cursor..after]);
+                out.push_str("***");
+                cursor = end;
+            }
+            None => break,
+        }
+    }
+    out.push_str(&result[cursor..]);
+    out
 }
 
 /// Validate a remote URI — must use a supported scheme and have a recognized file extension.
@@ -124,9 +171,23 @@ pub fn build_s3_credential_sql(creds: &RemoteCredentials) -> String {
             access_key, secret_key, region
         );
 
+        if let Some(token) = creds.session_token.as_deref().filter(|t| !t.is_empty()) {
+            let token = escape_sql_string(token);
+            sql.push_str(&format!(",\n    SESSION_TOKEN '{}'", token));
+        }
+
         if let Some(endpoint) = creds.endpoint.as_deref().filter(|e| !e.is_empty()) {
             let endpoint = escape_sql_string(endpoint);
             sql.push_str(&format!(",\n    ENDPOINT '{}'", endpoint));
+        }
+
+        if let Some(style) = creds.url_style.as_deref().filter(|s| !s.is_empty()) {
+            let style = escape_sql_string(style);
+            sql.push_str(&format!(",\n    URL_STYLE '{}'", style));
+        }
+
+        if let Some(use_ssl) = creds.use_ssl {
+            sql.push_str(&format!(",\n    USE_SSL {}", use_ssl));
         }
 
         sql.push_str("\n)");
@@ -153,6 +214,18 @@ pub fn build_gcs_credential_sql(creds: &RemoteCredentials) -> String {
     } else {
         "CREATE OR REPLACE SECRET (TYPE GCS, PROVIDER CREDENTIAL_CHAIN)".to_string()
     }
+}
+
+/// Generate the CREATE SECRET SQL for private HTTP/HTTPS endpoints.
+///
+/// Returns `None` when no bearer token is provided (public URL — no secret needed).
+pub fn build_http_credential_sql(creds: &RemoteCredentials) -> Option<String> {
+    let token = creds.bearer_token.as_deref().filter(|t| !t.is_empty())?;
+    let token = escape_sql_string(token);
+    Some(format!(
+        "CREATE OR REPLACE SECRET (\n    TYPE HTTP,\n    EXTRA_HTTP_HEADERS MAP {{'Authorization': 'Bearer {}'}}\n)",
+        token
+    ))
 }
 
 /// Load a remote file (S3, GCS, or HTTP) into a DuckDB table.
@@ -190,8 +263,14 @@ pub fn load_remote(
         log.log_query("configure_gcs_credentials", &redacted, 0, None, None);
         conn.execute_batch(&cred_sql)
             .map_err(DiffDonkeyError::DuckDb)?;
+    } else if uri.starts_with("http://") || uri.starts_with("https://") {
+        if let Some(cred_sql) = build_http_credential_sql(credentials) {
+            let redacted = redact_credentials(&cred_sql);
+            log.log_query("configure_http_credentials", &redacted, 0, None, None);
+            conn.execute_batch(&cred_sql)
+                .map_err(DiffDonkeyError::DuckDb)?;
+        }
     }
-    // HTTP/HTTPS: no credentials needed
 
     // Build the load SQL based on file type
     let escaped_uri = escape_sql_string(uri);
@@ -357,6 +436,7 @@ mod tests {
             secret_key: Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             region: Some("us-west-2".to_string()),
             endpoint: None,
+            ..Default::default()
         };
 
         let sql = build_s3_credential_sql(&creds);
@@ -375,6 +455,7 @@ mod tests {
             secret_key: Some("gcs-secret-key".to_string()),
             region: None,
             endpoint: None,
+            ..Default::default()
         };
 
         let sql = build_gcs_credential_sql(&creds);
@@ -409,6 +490,7 @@ mod tests {
             secret_key: Some("minioadmin".to_string()),
             region: Some("us-east-1".to_string()),
             endpoint: Some("localhost:9000".to_string()),
+            ..Default::default()
         };
 
         let sql = build_s3_credential_sql(&creds);
@@ -449,5 +531,149 @@ mod tests {
 
         let sql = build_s3_credential_sql(&creds);
         assert!(sql.contains("key''with''quotes"));
+    }
+
+    // ─── Session token ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_s3_sql_with_session_token() {
+        let creds = RemoteCredentials {
+            access_key: Some("AKID".to_string()),
+            secret_key: Some("SECRET".to_string()),
+            session_token: Some("FwoGZX...token".to_string()),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(sql.contains("SESSION_TOKEN 'FwoGZX...token'"));
+        assert!(sql.contains("KEY_ID 'AKID'"));
+    }
+
+    #[test]
+    fn test_s3_sql_without_session_token() {
+        let creds = RemoteCredentials {
+            access_key: Some("AKID".to_string()),
+            secret_key: Some("SECRET".to_string()),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(!sql.contains("SESSION_TOKEN"));
+    }
+
+    #[test]
+    fn test_s3_sql_empty_session_token_ignored() {
+        let creds = RemoteCredentials {
+            access_key: Some("AKID".to_string()),
+            secret_key: Some("SECRET".to_string()),
+            session_token: Some("".to_string()),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(!sql.contains("SESSION_TOKEN"));
+    }
+
+    // ─── S3-compatible endpoint flags ───────────────────────────────────
+
+    #[test]
+    fn test_s3_sql_with_url_style_path() {
+        let creds = RemoteCredentials {
+            access_key: Some("minioadmin".to_string()),
+            secret_key: Some("minioadmin".to_string()),
+            endpoint: Some("localhost:9000".to_string()),
+            url_style: Some("path".to_string()),
+            use_ssl: Some(false),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(sql.contains("URL_STYLE 'path'"));
+        assert!(sql.contains("USE_SSL false"));
+        assert!(sql.contains("ENDPOINT 'localhost:9000'"));
+    }
+
+    #[test]
+    fn test_s3_sql_use_ssl_true() {
+        let creds = RemoteCredentials {
+            access_key: Some("key".to_string()),
+            secret_key: Some("secret".to_string()),
+            use_ssl: Some(true),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(sql.contains("USE_SSL true"));
+    }
+
+    #[test]
+    fn test_s3_sql_no_ssl_flag_when_none() {
+        let creds = RemoteCredentials {
+            access_key: Some("key".to_string()),
+            secret_key: Some("secret".to_string()),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(!sql.contains("USE_SSL"));
+    }
+
+    // ─── HTTP bearer token ──────────────────────────────────────────────
+
+    #[test]
+    fn test_http_sql_with_bearer_token() {
+        let creds = RemoteCredentials {
+            bearer_token: Some("ghp_abc123XYZ".to_string()),
+            ..Default::default()
+        };
+
+        let sql = build_http_credential_sql(&creds);
+        assert!(sql.is_some());
+        let sql = sql.unwrap();
+        assert!(sql.contains("TYPE HTTP"));
+        assert!(sql.contains("'Bearer ghp_abc123XYZ'"));
+    }
+
+    #[test]
+    fn test_http_sql_without_bearer_token_returns_none() {
+        let creds = RemoteCredentials::default();
+        assert!(build_http_credential_sql(&creds).is_none());
+    }
+
+    #[test]
+    fn test_http_sql_empty_bearer_token_returns_none() {
+        let creds = RemoteCredentials {
+            bearer_token: Some("".to_string()),
+            ..Default::default()
+        };
+        assert!(build_http_credential_sql(&creds).is_none());
+    }
+
+    // ─── Redaction ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_redact_session_token() {
+        let creds = RemoteCredentials {
+            access_key: Some("AKID".to_string()),
+            secret_key: Some("SECRET".to_string()),
+            session_token: Some("FwoGZXtoken".to_string()),
+            ..Default::default()
+        };
+        let sql = build_s3_credential_sql(&creds);
+        let redacted = redact_credentials(&sql);
+        assert!(redacted.contains("SESSION_TOKEN '***'"));
+        assert!(!redacted.contains("FwoGZXtoken"));
+    }
+
+    #[test]
+    fn test_redact_bearer_token() {
+        let creds = RemoteCredentials {
+            bearer_token: Some("ghp_secret123".to_string()),
+            ..Default::default()
+        };
+        let sql = build_http_credential_sql(&creds).unwrap();
+        let redacted = redact_credentials(&sql);
+        assert!(redacted.contains("'Bearer ***'"));
+        assert!(!redacted.contains("ghp_secret123"));
     }
 }

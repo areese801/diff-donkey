@@ -27,10 +27,30 @@ jsonwebtoken = "9"
 rsa = { version = "0.9", features = ["pkcs5"] }
 sha2 = "0.10"
 base64 = "0.22"
-tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "io-util", "sync", "macros"] }
 russh = "0.46"
 russh-keys = "0.46"
 async-trait = "0.1"
+
+# Integration-test-only deps. Gated behind the `integration` feature so that a
+# plain `cargo test` does not pull aws-sdk-s3 (very large) or testcontainers.
+# Enable with `cargo test --features integration --test remote_auth`.
+testcontainers = { version = "0.24", optional = true }
+testcontainers-modules = { version = "0.12", features = ["minio"], optional = true }
+aws-config = { version = "1", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
+
+[features]
+integration = [
+    "dep:testcontainers",
+    "dep:testcontainers-modules",
+    "dep:aws-config",
+    "dep:aws-sdk-s3",
+]
+
+[[test]]
+name = "remote_auth"
+required-features = ["integration"]
 
 [profile.release]
 codegen-units = 1
