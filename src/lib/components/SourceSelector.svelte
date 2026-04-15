@@ -23,8 +23,8 @@
   let showConnectionManager = $state(false);
 
   /** Remote source state */
-  let remoteUriA = $state("");
-  let remoteUriB = $state("");
+  let remoteUriA = $state(localStorage.getItem("diff-donkey:remoteUriA") ?? "");
+  let remoteUriB = $state(localStorage.getItem("diff-donkey:remoteUriB") ?? "");
   let accessKeyA = $state("");
   let accessKeyB = $state("");
   let secretKeyA = $state("");
@@ -46,8 +46,8 @@
 
   /** Remote profile state */
   let remoteProfiles: SavedRemoteProfile[] = $state([]);
-  let selectedProfileA = $state("");
-  let selectedProfileB = $state("");
+  let selectedProfileA = $state(localStorage.getItem("diff-donkey:remoteProfileA") ?? "");
+  let selectedProfileB = $state(localStorage.getItem("diff-donkey:remoteProfileB") ?? "");
   let profileNameA = $state("");
   let profileNameB = $state("");
   let savingA = $state(false);
@@ -58,8 +58,15 @@
   }
 
   async function selectProfile(label: "a" | "b", profileId: string) {
-    if (label === "a") selectedProfileA = profileId;
-    else selectedProfileB = profileId;
+    if (label === "a") {
+      selectedProfileA = profileId;
+      if (profileId) localStorage.setItem("diff-donkey:remoteProfileA", profileId);
+      else localStorage.removeItem("diff-donkey:remoteProfileA");
+    } else {
+      selectedProfileB = profileId;
+      if (profileId) localStorage.setItem("diff-donkey:remoteProfileB", profileId);
+      else localStorage.removeItem("diff-donkey:remoteProfileB");
+    }
 
     if (!profileId) return;
     const profile = remoteProfiles.find(p => p.id === profileId);
@@ -128,8 +135,8 @@
     try {
       await saveRemoteProfile(profile, secrets);
       await refreshProfiles();
-      if (label === "a") { selectedProfileA = profile.id; profileNameA = ""; errorA = null; }
-      else { selectedProfileB = profile.id; profileNameB = ""; errorB = null; }
+      if (label === "a") { selectedProfileA = profile.id; profileNameA = ""; errorA = null; localStorage.setItem("diff-donkey:remoteProfileA", profile.id); }
+      else { selectedProfileB = profile.id; profileNameB = ""; errorB = null; localStorage.setItem("diff-donkey:remoteProfileB", profile.id); }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (label === "a") errorA = msg; else errorB = msg;
@@ -143,8 +150,8 @@
     if (!id) return;
     try {
       await deleteRemoteProfile(id);
-      if (label === "a") selectedProfileA = "";
-      else selectedProfileB = "";
+      if (label === "a") { selectedProfileA = ""; localStorage.removeItem("diff-donkey:remoteProfileA"); }
+      else { selectedProfileB = ""; localStorage.removeItem("diff-donkey:remoteProfileB"); }
       await refreshProfiles();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -152,8 +159,13 @@
     }
   }
 
-  // Load profiles on mount
-  $effect(() => { refreshProfiles(); });
+  // Load profiles on mount and restore saved selections
+  $effect(() => {
+    refreshProfiles().then(() => {
+      if (selectedProfileA) selectProfile("a", selectedProfileA);
+      if (selectedProfileB) selectProfile("b", selectedProfileB);
+    });
+  });
 
   function needsCredentials(uri: string): boolean {
     return uri.startsWith("s3://") || uri.startsWith("gs://");
@@ -189,14 +201,23 @@
       if (label === "a") {
         metaA = meta;
         sourceA.set(meta);
+        localStorage.setItem("diff-donkey:remoteUriA", uri);
       } else {
         metaB = meta;
         sourceB.set(meta);
+        localStorage.setItem("diff-donkey:remoteUriB", uri);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (label === "a") errorA = msg;
-      else errorB = msg;
+      if (label === "a") {
+        errorA = msg;
+        remoteUriA = "";
+        localStorage.removeItem("diff-donkey:remoteUriA");
+      } else {
+        errorB = msg;
+        remoteUriB = "";
+        localStorage.removeItem("diff-donkey:remoteUriB");
+      }
     } finally {
       if (label === "a") loadingA = false;
       else loadingB = false;
