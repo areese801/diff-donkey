@@ -50,14 +50,15 @@ pub struct RemoteSecrets {
     pub bearer_token: Option<String>,
 }
 
-/// Get the path to remote_profiles.json in the app's data directory.
-pub fn get_remote_profiles_path(app_handle: &tauri::AppHandle) -> PathBuf {
-    use tauri::Manager;
-    let data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .expect("Failed to resolve app data directory");
-    data_dir.join("remote_profiles.json")
+/// Get the path to ~/.diff-donkey/credentials/remote-profiles.json.
+pub fn get_remote_profiles_path(_app_handle: &tauri::AppHandle) -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .expect("Failed to resolve home directory");
+    PathBuf::from(home)
+        .join(".diff-donkey")
+        .join("credentials")
+        .join("remote-profiles.json")
 }
 
 /// Read all saved remote profiles from the JSON file.
