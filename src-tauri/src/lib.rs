@@ -4,13 +4,13 @@ mod connections;
 mod db;
 mod db_loader;
 mod diff;
-mod error;
+pub mod error;
 mod loader;
 mod query_history;
-mod remote_loader;
+pub mod remote_loader;
 pub mod snowflake;
 mod ssh_tunnel;
-mod types;
+pub mod types;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

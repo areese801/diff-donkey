@@ -97,13 +97,17 @@ export interface DiffConfig {
 /** Supported database types for remote loading */
 export type DatabaseType = "postgres" | "mysql" | "snowflake";
 
-/** Credentials for accessing remote storage (S3, GCS) */
+/** Credentials for accessing remote storage (S3, GCS, private HTTPS) */
 export interface RemoteCredentials {
   provider?: string | null;
   access_key?: string | null;
   secret_key?: string | null;
   region?: string | null;
   endpoint?: string | null;
+  session_token?: string | null;
+  url_style?: string | null;
+  use_ssl?: boolean | null;
+  bearer_token?: string | null;
 }
 
 /** Paginated row data returned from backend */

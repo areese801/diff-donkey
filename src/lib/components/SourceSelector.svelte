@@ -32,6 +32,16 @@
   let regionB = $state("");
   let endpointA = $state("");
   let endpointB = $state("");
+  let sessionTokenA = $state("");
+  let sessionTokenB = $state("");
+  let urlStyleA = $state("");
+  let urlStyleB = $state("");
+  let useSslA = $state<boolean | null>(null);
+  let useSslB = $state<boolean | null>(null);
+  let bearerTokenA = $state("");
+  let bearerTokenB = $state("");
+  let showCredsA = $state(false);
+  let showCredsB = $state(false);
 
   function needsCredentials(uri: string): boolean {
     return uri.startsWith("s3://") || uri.startsWith("gs://");
@@ -56,6 +66,10 @@
       secret_key: (label === "a" ? secretKeyA : secretKeyB) || null,
       region: (label === "a" ? regionA : regionB) || null,
       endpoint: (label === "a" ? endpointA : endpointB) || null,
+      session_token: (label === "a" ? sessionTokenA : sessionTokenB) || null,
+      url_style: (label === "a" ? urlStyleA : urlStyleB) || null,
+      use_ssl: label === "a" ? useSslA : useSslB,
+      bearer_token: (label === "a" ? bearerTokenA : bearerTokenB) || null,
     };
 
     try {
@@ -223,12 +237,37 @@
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.csv or https://..." />
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
+      <button class="creds-toggle" class:open={showCredsA} onclick={() => showCredsA = !showCredsA} title="Credentials">{showCredsA ? "▾" : "▸"} Auth</button>
       {#if metaA && modeA === "remote"}
         <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
+      {#if showCredsA}
+        <div class="creds-grid">
+          <label>Access Key <input type="text" bind:value={accessKeyA} placeholder="AKIAIOSFODNN7EXAMPLE" /></label>
+          <label>Secret Key <input type="password" bind:value={secretKeyA} placeholder="wJalrXUtnFEMI/K7MDENG/..." /></label>
+          <label>Region <input type="text" bind:value={regionA} placeholder="us-east-1" /></label>
+          <label>Endpoint <input type="text" bind:value={endpointA} placeholder="127.0.0.1:9000" /></label>
+          <label>Session Token <input type="text" bind:value={sessionTokenA} placeholder="Optional STS token" /></label>
+          <label>URL Style
+            <select bind:value={urlStyleA}>
+              <option value="">Default</option>
+              <option value="path">Path</option>
+              <option value="vhost">Virtual Host</option>
+            </select>
+          </label>
+          <label>Use SSL
+            <select value={useSslA === null ? "" : useSslA ? "true" : "false"} onchange={(e) => { const v = (e.target as HTMLSelectElement).value; useSslA = v === "" ? null : v === "true"; }}>
+              <option value="">Default</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </label>
+          <label>Bearer Token <input type="password" bind:value={bearerTokenA} placeholder="For private HTTP endpoints" /></label>
+        </div>
+      {/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
       <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
@@ -254,12 +293,37 @@
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.parquet or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.csv or https://..." />
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
+      <button class="creds-toggle" class:open={showCredsB} onclick={() => showCredsB = !showCredsB} title="Credentials">{showCredsB ? "▾" : "▸"} Auth</button>
       {#if metaB && modeB === "remote"}
         <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
+      {#if showCredsB}
+        <div class="creds-grid">
+          <label>Access Key <input type="text" bind:value={accessKeyB} placeholder="AKIAIOSFODNN7EXAMPLE" /></label>
+          <label>Secret Key <input type="password" bind:value={secretKeyB} placeholder="wJalrXUtnFEMI/K7MDENG/..." /></label>
+          <label>Region <input type="text" bind:value={regionB} placeholder="us-east-1" /></label>
+          <label>Endpoint <input type="text" bind:value={endpointB} placeholder="127.0.0.1:9000" /></label>
+          <label>Session Token <input type="text" bind:value={sessionTokenB} placeholder="Optional STS token" /></label>
+          <label>URL Style
+            <select bind:value={urlStyleB}>
+              <option value="">Default</option>
+              <option value="path">Path</option>
+              <option value="vhost">Virtual Host</option>
+            </select>
+          </label>
+          <label>Use SSL
+            <select value={useSslB === null ? "" : useSslB ? "true" : "false"} onchange={(e) => { const v = (e.target as HTMLSelectElement).value; useSslB = v === "" ? null : v === "true"; }}>
+              <option value="">Default</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </label>
+          <label>Bearer Token <input type="password" bind:value={bearerTokenB} placeholder="For private HTTP endpoints" /></label>
+        </div>
+      {/if}
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
     {/if}
@@ -269,8 +333,12 @@
 <style>
   .source-selector {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    column-gap: 24px;
+    row-gap: 8px;
   }
 
   .source-row {
@@ -279,6 +347,7 @@
     gap: 10px;
     padding: 6px 0;
     flex-wrap: wrap;
+    flex: 0 1 auto;
   }
 
   .source-label {
@@ -391,6 +460,56 @@
     flex: 1;
   }
 
+  .creds-toggle {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.75em;
+    color: #888;
+    white-space: nowrap;
+  }
+
+  .creds-toggle:hover {
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .creds-toggle.open {
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .creds-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 4px 8px;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.02);
+    flex-basis: 100%;
+  }
+
+  .creds-grid label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.7em;
+    color: #888;
+    gap: 2px;
+  }
+
+  .creds-grid input,
+  .creds-grid select {
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 1.1em;
+    color: inherit;
+    background: transparent;
+  }
+
   .load-btn {
     padding: 4px 10px;
     border: none;
@@ -467,6 +586,20 @@
     }
 
     .remote-uri {
+      border-color: #555;
+    }
+
+    .creds-toggle {
+      border-color: #555;
+    }
+
+    .creds-grid {
+      border-color: #444;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .creds-grid input,
+    .creds-grid select {
       border-color: #555;
     }
 
