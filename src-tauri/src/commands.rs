@@ -21,6 +21,7 @@ use crate::error::DiffDonkeyError;
 use crate::loader;
 use crate::query_history::{self, QueryHistoryEntry};
 use crate::remote_loader::{self, RemoteCredentials};
+use crate::remote_profiles::{self, RemoteSecrets, SavedRemoteProfile};
 use crate::snowflake;
 use crate::types::{
     ColumnTolerance, DiffConfig, OverviewResult, PagedRows, PkMode, SchemaComparison, TableMeta,
@@ -1652,4 +1653,46 @@ pub fn clear_query_history(
 ) -> Result<(), String> {
     let path = query_history::get_history_path(&app_handle);
     query_history::clear_history(&path, connection_id.as_deref()).map_err(|e| e.to_string())
+}
+
+// ─── Remote profiles ────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_remote_profiles(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<SavedRemoteProfile>, String> {
+    let path = remote_profiles::get_remote_profiles_path(&app_handle);
+    remote_profiles::list_profiles(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_remote_profile(
+    app_handle: tauri::AppHandle,
+    profile: SavedRemoteProfile,
+    secrets: RemoteSecrets,
+) -> Result<(), String> {
+    let path = remote_profiles::get_remote_profiles_path(&app_handle);
+    eprintln!("[DEBUG] save_remote_profile: path={:?}, profile={:?}", path, profile);
+    remote_profiles::save_profile(&path, profile, secrets).map_err(|e| {
+        eprintln!("[ERROR] save_remote_profile failed: {}", e);
+        e.to_string()
+    })
+}
+
+#[tauri::command]
+pub fn delete_remote_profile(
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let path = remote_profiles::get_remote_profiles_path(&app_handle);
+    remote_profiles::delete_profile(&path, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_remote_profile_secrets(
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<RemoteSecrets, String> {
+    let path = remote_profiles::get_remote_profiles_path(&app_handle);
+    remote_profiles::get_profile_secrets(&path, &id).map_err(|e| e.to_string())
 }

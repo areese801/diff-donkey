@@ -7,7 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { TableMeta, SchemaComparison, OverviewResult, PagedRows, DiffConfig, DatabaseType, QueryLogEntry, QueryHistoryEntry, RemoteCredentials } from "./types/diff";
-import type { SavedConnection, ImportResult } from "./types/connections";
+import type { SavedConnection, ImportResult, SavedRemoteProfile, RemoteSecrets } from "./types/connections";
 
 /** Load a file into DuckDB as source_a or source_b */
 export async function loadSource(
@@ -232,4 +232,29 @@ export async function clearQueryHistory(connectionId?: string): Promise<void> {
   return invoke<void>("clear_query_history", {
     connectionId: connectionId ?? null,
   });
+}
+
+// ─── Remote Profiles ──────────────────────────────────────────────────────
+
+/** List all saved remote profiles */
+export async function listRemoteProfiles(): Promise<SavedRemoteProfile[]> {
+  return invoke<SavedRemoteProfile[]>("list_remote_profiles");
+}
+
+/** Save (create or update) a remote profile with secrets in keychain */
+export async function saveRemoteProfile(
+  profile: SavedRemoteProfile,
+  secrets: RemoteSecrets,
+): Promise<void> {
+  return invoke<void>("save_remote_profile", { profile, secrets });
+}
+
+/** Delete a saved remote profile by ID */
+export async function deleteRemoteProfile(id: string): Promise<void> {
+  return invoke<void>("delete_remote_profile", { id });
+}
+
+/** Get secrets for a remote profile from the OS keychain */
+export async function getRemoteProfileSecrets(id: string): Promise<RemoteSecrets> {
+  return invoke<RemoteSecrets>("get_remote_profile_secrets", { id });
 }

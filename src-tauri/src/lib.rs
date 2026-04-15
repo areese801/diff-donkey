@@ -8,6 +8,7 @@ pub mod error;
 mod loader;
 mod query_history;
 pub mod remote_loader;
+mod remote_profiles;
 pub mod snowflake;
 mod ssh_tunnel;
 pub mod types;
@@ -44,6 +45,10 @@ pub fn run() {
             commands::get_query_history,
             commands::delete_query_history_entry,
             commands::clear_query_history,
+            commands::list_remote_profiles,
+            commands::save_remote_profile,
+            commands::delete_remote_profile,
+            commands::get_remote_profile_secrets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

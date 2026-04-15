@@ -1,10 +1,11 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
-  import { loadSource, loadRemoteSource } from "$lib/tauri";
+  import { loadSource, loadRemoteSource, listRemoteProfiles, saveRemoteProfile, deleteRemoteProfile, getRemoteProfileSecrets } from "$lib/tauri";
   import { sourceA, sourceB } from "$lib/stores/config";
   import DatabaseSource from "$lib/components/DatabaseSource.svelte";
   import ConnectionManager from "$lib/components/ConnectionManager.svelte";
   import type { TableMeta, RemoteCredentials } from "$lib/types/diff";
+  import type { SavedRemoteProfile, RemoteSecrets } from "$lib/types/connections";
 
   type SourceMode = "file" | "database" | "remote";
 
@@ -28,8 +29,8 @@
   let accessKeyB = $state("");
   let secretKeyA = $state("");
   let secretKeyB = $state("");
-  let regionA = $state("");
-  let regionB = $state("");
+  let regionA = $state("us-east-1");
+  let regionB = $state("us-east-1");
   let endpointA = $state("");
   let endpointB = $state("");
   let sessionTokenA = $state("");
@@ -42,6 +43,117 @@
   let bearerTokenB = $state("");
   let showCredsA = $state(false);
   let showCredsB = $state(false);
+
+  /** Remote profile state */
+  let remoteProfiles: SavedRemoteProfile[] = $state([]);
+  let selectedProfileA = $state("");
+  let selectedProfileB = $state("");
+  let profileNameA = $state("");
+  let profileNameB = $state("");
+  let savingA = $state(false);
+  let savingB = $state(false);
+
+  async function refreshProfiles() {
+    try { remoteProfiles = await listRemoteProfiles(); } catch { remoteProfiles = []; }
+  }
+
+  async function selectProfile(label: "a" | "b", profileId: string) {
+    if (label === "a") selectedProfileA = profileId;
+    else selectedProfileB = profileId;
+
+    if (!profileId) return;
+    const profile = remoteProfiles.find(p => p.id === profileId);
+    if (!profile) return;
+
+    try {
+      const secrets = await getRemoteProfileSecrets(profileId);
+      if (label === "a") {
+        regionA = profile.region ?? "";
+        endpointA = profile.endpoint ?? "";
+        urlStyleA = profile.url_style ?? "";
+        useSslA = profile.use_ssl ?? null;
+        accessKeyA = secrets.access_key ?? "";
+        secretKeyA = secrets.secret_key ?? "";
+        sessionTokenA = secrets.session_token ?? "";
+        bearerTokenA = secrets.bearer_token ?? "";
+        showCredsA = true;
+      } else {
+        regionB = profile.region ?? "";
+        endpointB = profile.endpoint ?? "";
+        urlStyleB = profile.url_style ?? "";
+        useSslB = profile.use_ssl ?? null;
+        accessKeyB = secrets.access_key ?? "";
+        secretKeyB = secrets.secret_key ?? "";
+        sessionTokenB = secrets.session_token ?? "";
+        bearerTokenB = secrets.bearer_token ?? "";
+        showCredsB = true;
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (label === "a") errorA = msg; else errorB = msg;
+    }
+  }
+
+  async function saveCurrentProfile(label: "a" | "b") {
+    const existingId = label === "a" ? selectedProfileA : selectedProfileB;
+    const existing = remoteProfiles.find(p => p.id === existingId);
+    const name = existing?.name ?? (label === "a" ? profileNameA : profileNameB).trim();
+    if (!name) {
+      if (label === "a") errorA = "Enter a profile name before saving";
+      else errorB = "Enter a profile name before saving";
+      return;
+    }
+
+    if (label === "a") savingA = true; else savingB = true;
+
+    const now = new Date().toISOString();
+    const profile: SavedRemoteProfile = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name,
+      provider: getProvider(label === "a" ? remoteUriA : remoteUriB),
+      region: (label === "a" ? regionA : regionB) || null,
+      endpoint: (label === "a" ? endpointA : endpointB) || null,
+      url_style: (label === "a" ? urlStyleA : urlStyleB) || null,
+      use_ssl: label === "a" ? useSslA : useSslB,
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    const secrets: RemoteSecrets = {
+      access_key: (label === "a" ? accessKeyA : accessKeyB) || null,
+      secret_key: (label === "a" ? secretKeyA : secretKeyB) || null,
+      session_token: (label === "a" ? sessionTokenA : sessionTokenB) || null,
+      bearer_token: (label === "a" ? bearerTokenA : bearerTokenB) || null,
+    };
+
+    try {
+      await saveRemoteProfile(profile, secrets);
+      await refreshProfiles();
+      if (label === "a") { selectedProfileA = profile.id; profileNameA = ""; errorA = null; }
+      else { selectedProfileB = profile.id; profileNameB = ""; errorB = null; }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (label === "a") errorA = msg; else errorB = msg;
+    } finally {
+      if (label === "a") savingA = false; else savingB = false;
+    }
+  }
+
+  async function deleteCurrentProfile(label: "a" | "b") {
+    const id = label === "a" ? selectedProfileA : selectedProfileB;
+    if (!id) return;
+    try {
+      await deleteRemoteProfile(id);
+      if (label === "a") selectedProfileA = "";
+      else selectedProfileB = "";
+      await refreshProfiles();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (label === "a") errorA = msg; else errorB = msg;
+    }
+  }
+
+  // Load profiles on mount
+  $effect(() => { refreshProfiles(); });
 
   function needsCredentials(uri: string): boolean {
     return uri.startsWith("s3://") || uri.startsWith("gs://");
@@ -245,6 +357,21 @@
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
       {#if showCredsA}
+        <div class="creds-profile-bar">
+          <select class="profile-select" value={selectedProfileA} onchange={(e) => selectProfile("a", (e.target as HTMLSelectElement).value)}>
+            <option value="">-- No saved profile --</option>
+            {#each remoteProfiles as p}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+          {#if !selectedProfileA}
+            <input class="profile-name-input" type="text" bind:value={profileNameA} placeholder="Profile name" />
+          {/if}
+          <button class="profile-btn" onclick={() => saveCurrentProfile("a")} disabled={savingA}>{savingA ? "..." : selectedProfileA ? "Update" : "Save"}</button>
+          {#if selectedProfileA}
+            <button class="profile-btn delete" onclick={() => deleteCurrentProfile("a")}>Delete</button>
+          {/if}
+        </div>
         <div class="creds-grid">
           <label>Access Key <input type="text" bind:value={accessKeyA} placeholder="AKIAIOSFODNN7EXAMPLE" /></label>
           <label>Secret Key <input type="password" bind:value={secretKeyA} placeholder="wJalrXUtnFEMI/K7MDENG/..." /></label>
@@ -301,6 +428,21 @@
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
       {#if showCredsB}
+        <div class="creds-profile-bar">
+          <select class="profile-select" value={selectedProfileB} onchange={(e) => selectProfile("b", (e.target as HTMLSelectElement).value)}>
+            <option value="">-- No saved profile --</option>
+            {#each remoteProfiles as p}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+          {#if !selectedProfileB}
+            <input class="profile-name-input" type="text" bind:value={profileNameB} placeholder="Profile name" />
+          {/if}
+          <button class="profile-btn" onclick={() => saveCurrentProfile("b")} disabled={savingB}>{savingB ? "..." : selectedProfileB ? "Update" : "Save"}</button>
+          {#if selectedProfileB}
+            <button class="profile-btn delete" onclick={() => deleteCurrentProfile("b")}>Delete</button>
+          {/if}
+        </div>
         <div class="creds-grid">
           <label>Access Key <input type="text" bind:value={accessKeyB} placeholder="AKIAIOSFODNN7EXAMPLE" /></label>
           <label>Secret Key <input type="password" bind:value={secretKeyB} placeholder="wJalrXUtnFEMI/K7MDENG/..." /></label>
@@ -481,6 +623,59 @@
     border-color: #396cd8;
   }
 
+  .creds-profile-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-basis: 100%;
+  }
+
+  .profile-select {
+    flex: 1;
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 0.8em;
+    color: inherit;
+    background: transparent;
+  }
+
+  .profile-name-input {
+    padding: 3px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 0.8em;
+    color: inherit;
+    background: transparent;
+    min-width: 120px;
+  }
+
+  .profile-btn {
+    padding: 3px 8px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.75em;
+    color: #888;
+    white-space: nowrap;
+  }
+
+  .profile-btn:hover:not(:disabled) {
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .profile-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .profile-btn.delete:hover {
+    color: #e74c3c;
+    border-color: #e74c3c;
+  }
+
   .creds-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr 1fr;
@@ -590,6 +785,18 @@
     }
 
     .creds-toggle {
+      border-color: #555;
+    }
+
+    .profile-select {
+      border-color: #555;
+    }
+
+    .profile-name-input {
+      border-color: #555;
+    }
+
+    .profile-btn {
       border-color: #555;
     }
 
