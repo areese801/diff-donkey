@@ -10,8 +10,8 @@
   type SourceMode = "file" | "database" | "remote";
 
   /** Current state for each source panel */
-  let modeA: SourceMode = $state("file");
-  let modeB: SourceMode = $state("file");
+  let modeA: SourceMode = $state((localStorage.getItem("diff-donkey:modeA") as SourceMode) ?? "file");
+  let modeB: SourceMode = $state((localStorage.getItem("diff-donkey:modeB") as SourceMode) ?? "file");
   let pathA: string = $state(localStorage.getItem("diff-donkey:pathA") ?? "");
   let pathB: string = $state(localStorage.getItem("diff-donkey:pathB") ?? "");
   let metaA: TableMeta | null = $state(null);
@@ -158,6 +158,10 @@
       if (label === "a") errorA = msg; else errorB = msg;
     }
   }
+
+  // Persist source mode selections
+  $effect(() => { localStorage.setItem("diff-donkey:modeA", modeA); });
+  $effect(() => { localStorage.setItem("diff-donkey:modeB", modeB); });
 
   // Load profiles on mount and restore saved selections
   $effect(() => {
