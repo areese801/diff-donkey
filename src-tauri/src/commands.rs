@@ -1672,11 +1672,7 @@ pub fn save_remote_profile(
     secrets: RemoteSecrets,
 ) -> Result<(), String> {
     let path = remote_profiles::get_remote_profiles_path(&app_handle);
-    eprintln!("[DEBUG] save_remote_profile: path={:?}, profile={:?}", path, profile);
-    remote_profiles::save_profile(&path, profile, secrets).map_err(|e| {
-        eprintln!("[ERROR] save_remote_profile failed: {}", e);
-        e.to_string()
-    })
+    remote_profiles::save_profile(&path, profile, secrets).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
