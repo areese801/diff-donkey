@@ -37,3 +37,24 @@ export interface ImportResult {
   skipped: number;
   skipped_names: string[];
 }
+
+/** A saved remote connection profile (non-sensitive fields). */
+export interface SavedRemoteProfile {
+  id: string;
+  name: string;
+  provider?: string | null;
+  region?: string | null;
+  endpoint?: string | null;
+  url_style?: string | null;
+  use_ssl?: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Sensitive credential fields stored in the OS keychain. */
+export interface RemoteSecrets {
+  access_key?: string | null;
+  secret_key?: string | null;
+  session_token?: string | null;
+  bearer_token?: string | null;
+}
