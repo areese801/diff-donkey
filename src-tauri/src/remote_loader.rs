@@ -118,9 +118,10 @@ pub fn validate_uri(uri: &str) -> Result<RemoteFileType, DiffDonkeyError> {
         ));
     }
 
-    // Validate scheme
+    // Validate scheme (case-insensitive)
+    let uri_lower = uri_trimmed.to_lowercase();
     let valid_schemes = ["s3://", "gs://", "http://", "https://"];
-    if !valid_schemes.iter().any(|s| uri_trimmed.starts_with(s)) {
+    if !valid_schemes.iter().any(|s| uri_lower.starts_with(s)) {
         return Err(DiffDonkeyError::Validation(
             "URI must start with s3://, gs://, http://, or https://".to_string(),
         ));
@@ -177,8 +178,18 @@ pub fn build_s3_credential_sql(creds: &RemoteCredentials) -> String {
         }
 
         if let Some(endpoint) = creds.endpoint.as_deref().filter(|e| !e.is_empty()) {
-            let endpoint = escape_sql_string(endpoint);
-            sql.push_str(&format!(",\n    ENDPOINT '{}'", endpoint));
+            // Strip http:// or https:// prefix — DuckDB expects host:port only
+            let use_ssl = endpoint.starts_with("https://");
+            let clean_endpoint = endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            let clean_endpoint = escape_sql_string(clean_endpoint);
+            sql.push_str(&format!(",\n    ENDPOINT '{}'", clean_endpoint));
+            sql.push_str(",\n    URL_STYLE 'path'");
+            if !use_ssl {
+                sql.push_str(",\n    USE_SSL false");
+            }
         }
 
         if let Some(style) = creds.url_style.as_deref().filter(|s| !s.is_empty()) {
@@ -249,15 +260,16 @@ pub fn load_remote(
     let install_sql = "INSTALL httpfs; LOAD httpfs;";
     activity::execute_logged(conn, install_sql, "install_httpfs", log)?;
 
-    // Configure credentials based on URI scheme
-    if uri.starts_with("s3://") {
+    // Configure credentials based on URI scheme (case-insensitive)
+    let uri_lower = uri.to_lowercase();
+    if uri_lower.starts_with("s3://") {
         let cred_sql = build_s3_credential_sql(credentials);
         let redacted = redact_credentials(&cred_sql);
         // Log the redacted version, execute the real one
         log.log_query("configure_s3_credentials", &redacted, 0, None, None);
         conn.execute_batch(&cred_sql)
             .map_err(DiffDonkeyError::DuckDb)?;
-    } else if uri.starts_with("gs://") {
+    } else if uri_lower.starts_with("gs://") {
         let cred_sql = build_gcs_credential_sql(credentials);
         let redacted = redact_credentials(&cred_sql);
         log.log_query("configure_gcs_credentials", &redacted, 0, None, None);
@@ -272,8 +284,15 @@ pub fn load_remote(
         }
     }
 
+    // Normalize scheme to lowercase for DuckDB compatibility
+    let normalized_uri = if let Some(idx) = uri.find("://") {
+        format!("{}{}", uri[..idx].to_lowercase(), &uri[idx..])
+    } else {
+        uri.to_string()
+    };
+
     // Build the load SQL based on file type
-    let escaped_uri = escape_sql_string(uri);
+    let escaped_uri = escape_sql_string(&normalized_uri);
     let read_fn = match file_type {
         RemoteFileType::Parquet => "read_parquet",
         RemoteFileType::Csv => "read_csv_auto",

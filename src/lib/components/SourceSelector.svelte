@@ -374,7 +374,7 @@
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.csv or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.csv or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
       <button class="creds-toggle" class:open={showCredsA} onclick={() => showCredsA = !showCredsA} title="Credentials">{showCredsA ? "▾" : "▸"} Auth</button>
       {#if metaA && modeA === "remote"}
@@ -445,7 +445,7 @@
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
-      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.csv or https://..." />
+      <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.csv or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
       <button class="creds-toggle" class:open={showCredsB} onclick={() => showCredsB = !showCredsB} title="Credentials">{showCredsB ? "▾" : "▸"} Auth</button>
       {#if metaB && modeB === "remote"}
