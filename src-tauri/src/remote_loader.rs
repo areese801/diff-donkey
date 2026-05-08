@@ -177,28 +177,40 @@ pub fn build_s3_credential_sql(creds: &RemoteCredentials) -> String {
             sql.push_str(&format!(",\n    SESSION_TOKEN '{}'", token));
         }
 
+        // URL_STYLE and USE_SSL are emitted exactly once each. Endpoint
+        // presence supplies defaults (path-style, scheme-inferred SSL) and the
+        // explicit profile fields override those defaults when set.
+        let mut url_style: Option<String> = None;
+        let mut use_ssl: Option<bool> = None;
+
         if let Some(endpoint) = creds.endpoint.as_deref().filter(|e| !e.is_empty()) {
             // Strip http:// or https:// prefix — DuckDB expects host:port only
-            let use_ssl = endpoint.starts_with("https://");
+            let inferred_ssl = endpoint.starts_with("https://");
             let clean_endpoint = endpoint
                 .trim_start_matches("https://")
                 .trim_start_matches("http://")
                 .trim_end_matches('/');
             let clean_endpoint = escape_sql_string(clean_endpoint);
             sql.push_str(&format!(",\n    ENDPOINT '{}'", clean_endpoint));
-            sql.push_str(",\n    URL_STYLE 'path'");
-            if !use_ssl {
-                sql.push_str(",\n    USE_SSL false");
-            }
+            url_style = Some("path".to_string());
+            use_ssl = Some(inferred_ssl);
         }
 
         if let Some(style) = creds.url_style.as_deref().filter(|s| !s.is_empty()) {
-            let style = escape_sql_string(style);
+            url_style = Some(style.to_string());
+        }
+
+        if let Some(ssl) = creds.use_ssl {
+            use_ssl = Some(ssl);
+        }
+
+        if let Some(style) = url_style {
+            let style = escape_sql_string(&style);
             sql.push_str(&format!(",\n    URL_STYLE '{}'", style));
         }
 
-        if let Some(use_ssl) = creds.use_ssl {
-            sql.push_str(&format!(",\n    USE_SSL {}", use_ssl));
+        if let Some(ssl) = use_ssl {
+            sql.push_str(&format!(",\n    USE_SSL {}", ssl));
         }
 
         sql.push_str("\n)");
@@ -610,6 +622,45 @@ mod tests {
         assert!(sql.contains("URL_STYLE 'path'"));
         assert!(sql.contains("USE_SSL false"));
         assert!(sql.contains("ENDPOINT 'localhost:9000'"));
+    }
+
+    #[test]
+    fn test_s3_sql_no_duplicate_url_style_or_use_ssl() {
+        // Regression: when endpoint + profile url_style + profile use_ssl are all
+        // set, each param must appear exactly once. DuckDB rejects duplicates with
+        // "Binder Error: Duplicate query param found while parsing create secret".
+        let creds = RemoteCredentials {
+            access_key: Some("minioadmin".to_string()),
+            secret_key: Some("minioadmin".to_string()),
+            endpoint: Some("127.0.0.1:9000".to_string()),
+            url_style: Some("path".to_string()),
+            use_ssl: Some(false),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert_eq!(sql.matches("URL_STYLE").count(), 1);
+        assert_eq!(sql.matches("USE_SSL").count(), 1);
+    }
+
+    #[test]
+    fn test_s3_sql_profile_overrides_endpoint_inferred_defaults() {
+        // Profile-supplied url_style="vhost" + use_ssl=true should override the
+        // endpoint-inferred defaults (path-style, http→ssl=false).
+        let creds = RemoteCredentials {
+            access_key: Some("k".to_string()),
+            secret_key: Some("s".to_string()),
+            endpoint: Some("http://host:9000".to_string()),
+            url_style: Some("vhost".to_string()),
+            use_ssl: Some(true),
+            ..Default::default()
+        };
+
+        let sql = build_s3_credential_sql(&creds);
+        assert!(sql.contains("URL_STYLE 'vhost'"));
+        assert!(!sql.contains("URL_STYLE 'path'"));
+        assert!(sql.contains("USE_SSL true"));
+        assert!(!sql.contains("USE_SSL false"));
     }
 
     #[test]
