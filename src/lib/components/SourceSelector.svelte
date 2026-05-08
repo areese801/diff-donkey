@@ -356,7 +356,7 @@
   {/if}
 
   <!-- Source A row -->
-  <div class="source-row">
+  <div class="source-row" class:expanded={modeA === "remote" && showCredsA}>
     <span class="source-label">Source A</span>
     <div class="mode-toggle">
       <button class="toggle-btn" class:active={modeA === "file"} onclick={() => modeA = "file"}>File</button>
@@ -370,15 +370,15 @@
         <button class="browse-btn" onclick={() => pickFile("a")} disabled={loadingA}>{loadingA ? "..." : "Browse"}</button>
       </div>
       {#if metaA && modeA === "file"}
-        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
     {:else if modeA === "remote"}
       <input class="remote-uri" type="text" bind:value={remoteUriA} placeholder="s3://bucket/path/file.csv or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("a")} disabled={!remoteUriA.trim() || loadingA}>{loadingA ? "..." : "Load"}</button>
-      <button class="creds-toggle" class:open={showCredsA} onclick={() => showCredsA = !showCredsA} title="Credentials">{showCredsA ? "▾" : "▸"} Auth</button>
+      <button class="creds-toggle btn-icon" class:open={showCredsA} onclick={() => showCredsA = !showCredsA} title="Credentials" aria-label="Toggle credentials">&#128273;</button>
       {#if metaA && modeA === "remote"}
-        <span class="meta-summary"><strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
       {/if}
       {#if errorA}<span class="error">{errorA}</span>{/if}
       {#if showCredsA}
@@ -422,12 +422,15 @@
       {/if}
     {:else}
       <DatabaseSource label="a" onLoaded={(meta) => handleDbLoaded("a", meta)} />
+      {#if metaA && modeA === "database"}
+        <span class="meta-summary loaded">&#10003; <strong>{metaA.row_count.toLocaleString()}</strong> rows &middot; {metaA.columns.length} cols</span>
+      {/if}
       <button class="manage-btn" onclick={() => (showConnectionManager = true)}>Connections</button>
     {/if}
   </div>
 
   <!-- Source B row -->
-  <div class="source-row">
+  <div class="source-row" class:expanded={modeB === "remote" && showCredsB}>
     <span class="source-label">Source B</span>
     <div class="mode-toggle">
       <button class="toggle-btn" class:active={modeB === "file"} onclick={() => modeB = "file"}>File</button>
@@ -441,15 +444,15 @@
         <button class="browse-btn" onclick={() => pickFile("b")} disabled={loadingB}>{loadingB ? "..." : "Browse"}</button>
       </div>
       {#if metaB && modeB === "file"}
-        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
     {:else if modeB === "remote"}
       <input class="remote-uri" type="text" bind:value={remoteUriB} placeholder="s3://bucket/path/file.csv or https://..." autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="load-btn" onclick={() => loadRemote("b")} disabled={!remoteUriB.trim() || loadingB}>{loadingB ? "..." : "Load"}</button>
-      <button class="creds-toggle" class:open={showCredsB} onclick={() => showCredsB = !showCredsB} title="Credentials">{showCredsB ? "▾" : "▸"} Auth</button>
+      <button class="creds-toggle btn-icon" class:open={showCredsB} onclick={() => showCredsB = !showCredsB} title="Credentials" aria-label="Toggle credentials">&#128273;</button>
       {#if metaB && modeB === "remote"}
-        <span class="meta-summary"><strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+        <span class="meta-summary loaded">&#10003; <strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
       {/if}
       {#if errorB}<span class="error">{errorB}</span>{/if}
       {#if showCredsB}
@@ -493,6 +496,9 @@
       {/if}
     {:else}
       <DatabaseSource label="b" onLoaded={(meta) => handleDbLoaded("b", meta)} />
+      {#if metaB && modeB === "database"}
+        <span class="meta-summary loaded">&#10003; <strong>{metaB.row_count.toLocaleString()}</strong> rows &middot; {metaB.columns.length} cols</span>
+      {/if}
     {/if}
   </div>
 </div>
@@ -515,6 +521,13 @@
     padding: 6px 0;
     flex-wrap: wrap;
     flex: 0 1 auto;
+  }
+
+  /* When credentials are open, give the source-row the full container width
+     so the credentials grid spans cleanly and Source B's controls can't
+     end up beside it at narrow widths. */
+  .source-row.expanded {
+    flex: 0 0 100%;
   }
 
   .source-label {
@@ -628,12 +641,13 @@
   }
 
   .creds-toggle {
-    padding: 4px 8px;
+    padding: 3px 7px;
     border: 1px solid #ccc;
     border-radius: 4px;
     background: transparent;
     cursor: pointer;
-    font-size: 0.75em;
+    font-size: 0.95em;
+    line-height: 1;
     color: #888;
     white-space: nowrap;
   }
@@ -646,6 +660,7 @@
   .creds-toggle.open {
     color: #396cd8;
     border-color: #396cd8;
+    background: rgba(57, 108, 216, 0.08);
   }
 
   .creds-profile-bar {
@@ -759,6 +774,15 @@
     font-size: 0.8em;
     color: #888;
     white-space: nowrap;
+  }
+
+  .meta-summary.loaded {
+    color: #27ae60;
+    font-weight: 500;
+  }
+
+  .meta-summary.loaded strong {
+    color: #27ae60;
   }
 
 
